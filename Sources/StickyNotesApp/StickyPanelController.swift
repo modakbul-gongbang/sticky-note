@@ -126,12 +126,12 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
                 ? NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
                 : NSFontManager.shared.convert(baseFont, toNotHaveTrait: .boldFontMask)
         } else {
-            editor.textStorage?.enumerateAttribute(.font, in: selection) { value, range, _ in
+            editor.requiredTextStorage.enumerateAttribute(.font, in: selection) { value, range, _ in
                 let font = value as? NSFont ?? baseFont
                 let converted = makeBold
                     ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
                     : NSFontManager.shared.convert(font, toNotHaveTrait: .boldFontMask)
-                editor.textStorage?.addAttribute(.font, value: converted, range: range)
+                editor.requiredTextStorage.addAttribute(.font, value: converted, range: range)
             }
             editor.didChangeText()
         }
@@ -168,7 +168,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         alert.addButton(withTitle: "링크 추가")
         alert.addButton(withTitle: "취소")
         guard alert.runModal() == .alertFirstButtonReturn, let url = URL(string: field.stringValue) else { return }
-        editor.textStorage?.addAttribute(.link, value: url, range: selection)
+        editor.requiredTextStorage.addAttribute(.link, value: url, range: selection)
         editor.didChangeText()
     }
 
@@ -190,7 +190,10 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     func windowDidMove(_ notification: Notification) { rememberCurrentFrame() }
-    func windowDidResize(_ notification: Notification) { rememberCurrentFrame() }
+    func windowDidResize(_ notification: Notification) {
+        editor.layoutForScrollableViewport()
+        rememberCurrentFrame()
+    }
 
     func textDidChange(_ notification: Notification) {
         guard !suppressChanges else { return }
@@ -337,6 +340,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             statusLabel.heightAnchor.constraint(equalToConstant: 26),
             statusLabel.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -32),
         ])
+        root.layoutSubtreeIfNeeded()
+        editor.layoutForScrollableViewport()
     }
 
     private func makeHeader() -> NSView {
@@ -645,9 +650,9 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     @discardableResult
     private func replaceEditorContent(with content: NSAttributedString) -> Bool {
         suppressChanges = true
-        editor.textStorage?.setAttributedString(content)
+        editor.requiredTextStorage.setAttributedString(content)
         let migratedChecklist = editor.reloadListPresentation()
-        editor.setSelectedRange(NSRange(location: editor.textStorage?.length ?? 0, length: 0))
+        editor.layoutForScrollableViewport(scrollToDocumentStart: true)
         resetTypingAttributes()
         editor.resetUndoHistory()
         suppressChanges = false

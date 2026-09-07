@@ -39,7 +39,7 @@ final class ListItemEditor: NSObject {
         )
         transaction(named: conversion.kind == .bullet ? "목록 생성" : "체크리스트 생성") {
             let attributes = attributesForListItem(level: 0)
-            textView.textStorage?.replaceCharacters(
+            textView.requiredTextStorage.replaceCharacters(
                 in: sourceRange,
                 with: NSAttributedString(string: conversion.kind.prefix, attributes: attributes)
             )
@@ -58,7 +58,7 @@ final class ListItemEditor: NSObject {
         let paragraph = paragraphRange(at: selection.location)
         transaction(named: itemKind == .bullet ? "목록 생성" : "체크리스트 생성") {
             let attributes = attributesForListItem(level: 0)
-            textView.textStorage?.insert(
+            textView.requiredTextStorage.insert(
                 NSAttributedString(string: itemKind.prefix, attributes: attributes),
                 at: paragraph.location
             )
@@ -85,7 +85,7 @@ final class ListItemEditor: NSObject {
         switch currentKind {
         case .uncheckedChecklist?, .checkedChecklist?:
             transaction(named: "체크리스트 해제") {
-                textView.textStorage?.deleteCharacters(in: NSRange(location: paragraph.location, length: 2))
+                textView.requiredTextStorage.deleteCharacters(in: NSRange(location: paragraph.location, length: 2))
                 let remaining = NSRange(location: paragraph.location, length: max(0, paragraph.length - 2))
                 applyPlainParagraphStyle(level: level, to: remaining)
                 textView.setSelectedRange(NSRange(
@@ -111,7 +111,7 @@ final class ListItemEditor: NSObject {
 
         if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             transaction(named: "목록 종료") {
-                textView.textStorage?.deleteCharacters(in: NSRange(location: paragraph.location, length: 2))
+                textView.requiredTextStorage.deleteCharacters(in: NSRange(location: paragraph.location, length: 2))
                 let remaining = NSRange(location: paragraph.location, length: max(0, paragraph.length - 2))
                 applyPlainParagraphStyle(level: level, to: remaining)
                 textView.setSelectedRange(NSRange(location: paragraph.location, length: 0))
@@ -124,7 +124,7 @@ final class ListItemEditor: NSObject {
         transaction(named: "목록 이어쓰기") {
             let replacement = textView.selectedRange()
             let inserted = "\n\(nextKind.prefix)"
-            textView.textStorage?.replaceCharacters(
+            textView.requiredTextStorage.replaceCharacters(
                 in: replacement,
                 with: NSAttributedString(string: inserted, attributes: attributesForListItem(level: level))
             )
@@ -162,7 +162,7 @@ final class ListItemEditor: NSObject {
         }
         let level = hierarchyLevel(at: paragraph.location)
         transaction(named: "목록 해제") {
-            textView.textStorage?.deleteCharacters(in: NSRange(location: paragraph.location, length: 2))
+            textView.requiredTextStorage.deleteCharacters(in: NSRange(location: paragraph.location, length: 2))
             let remaining = NSRange(location: paragraph.location, length: max(0, paragraph.length - 2))
             applyPlainParagraphStyle(level: level, to: remaining)
             textView.setSelectedRange(NSRange(location: paragraph.location, length: 0))
@@ -253,7 +253,7 @@ final class ListItemEditor: NSObject {
         guard let textView else { return }
         let level = hierarchyLevel(at: paragraph.location)
         transaction(named: actionName) {
-            textView.textStorage?.replaceCharacters(
+            textView.requiredTextStorage.replaceCharacters(
                 in: NSRange(location: paragraph.location, length: 2),
                 with: NSAttributedString(string: itemKind.prefix, attributes: attributesForListItem(level: level))
             )
@@ -287,12 +287,14 @@ final class ListItemEditor: NSObject {
 
     private func applyParagraphStyle(level: Int, to range: NSRange) {
         guard range.length > 0 else { return }
-        textView?.textStorage?.addAttribute(.paragraphStyle, value: paragraphStyle(level: level, isList: true), range: range)
+        guard let textView else { return }
+        textView.requiredTextStorage.addAttribute(.paragraphStyle, value: paragraphStyle(level: level, isList: true), range: range)
     }
 
     private func applyPlainParagraphStyle(level: Int, to range: NSRange) {
         guard range.length > 0 else { return }
-        textView?.textStorage?.addAttribute(.paragraphStyle, value: paragraphStyle(level: level, isList: false), range: range)
+        guard let textView else { return }
+        textView.requiredTextStorage.addAttribute(.paragraphStyle, value: paragraphStyle(level: level, isList: false), range: range)
     }
 
     private func attributesForListItem(level: Int) -> [NSAttributedString.Key: Any] {
@@ -357,7 +359,9 @@ final class ListItemEditor: NSObject {
     }
 
     private func hierarchyLevel(at location: Int) -> Int {
-        guard let storage = textView?.textStorage, storage.length > 0, location < storage.length else { return 0 }
+        guard let textView else { return 0 }
+        let storage = textView.requiredTextStorage
+        guard storage.length > 0, location < storage.length else { return 0 }
         let style = storage.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle
         let raw = Int(round((style?.firstLineHeadIndent ?? 0) / hierarchyIndent))
         return ListItemSyntax.adjustedIndentLevel(0, by: raw)
@@ -401,7 +405,9 @@ final class ListItemEditor: NSObject {
     }
 
     private func requiresLegacyMigration() -> Bool {
-        guard let textView, let storage = textView.textStorage, storage.length > 0 else { return false }
+        guard let textView else { return false }
+        let storage = textView.requiredTextStorage
+        guard storage.length > 0 else { return false }
         let source = storage.string as NSString
         var location = 0
         while location < source.length {
@@ -434,7 +440,8 @@ final class ListItemEditor: NSObject {
     }
 
     private func migrateLegacyContent() {
-        guard let textView, let storage = textView.textStorage else { return }
+        guard let textView else { return }
+        let storage = textView.requiredTextStorage
         var location = 0
         while location < storage.length {
             var source = storage.string as NSString
@@ -504,8 +511,9 @@ final class ListItemEditor: NSObject {
     }
 
     private func hasCanonicalParagraphStyle(at location: Int) -> Bool {
-        guard let storage = textView?.textStorage,
-              location < storage.length,
+        guard let textView else { return false }
+        let storage = textView.requiredTextStorage
+        guard location < storage.length,
               let style = storage.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle else {
             return false
         }
@@ -526,10 +534,9 @@ final class ListItemEditor: NSObject {
     }
 
     private func refreshTemporaryAttributes() {
-        guard presentationIsDirty,
-              let textView,
-              let layoutManager = textView.layoutManager else { return }
-        let fullRange = NSRange(location: 0, length: textView.textStorage?.length ?? 0)
+        guard presentationIsDirty, let textView else { return }
+        let layoutManager = textView.requiredLayoutManager
+        let fullRange = NSRange(location: 0, length: textView.requiredTextStorage.length)
         if fullRange.length > 0 {
             layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
             layoutManager.removeTemporaryAttribute(.strikethroughStyle, forCharacterRange: fullRange)
@@ -554,10 +561,9 @@ final class ListItemEditor: NSObject {
     }
 
     private func controlRect(forParagraphAt location: Int) -> NSRect? {
-        guard let textView,
-              let layoutManager = textView.layoutManager,
-              let textContainer = textView.textContainer,
-              location < (textView.textStorage?.length ?? 0) else { return nil }
+        guard let textView, location < textView.requiredTextStorage.length else { return nil }
+        let layoutManager = textView.requiredLayoutManager
+        let textContainer = textView.requiredTextContainer
         layoutManager.ensureLayout(for: textContainer)
         let glyph = layoutManager.glyphIndexForCharacter(at: location)
         var glyphBounds = layoutManager.boundingRect(
@@ -576,16 +582,14 @@ final class ListItemEditor: NSObject {
     }
 
     private func invalidatePresentation() {
-        guard let textView,
-              let layoutManager = textView.layoutManager else { return }
-        let fullRange = NSRange(location: 0, length: textView.textStorage?.length ?? 0)
+        guard let textView else { return }
+        let layoutManager = textView.requiredLayoutManager
+        let fullRange = NSRange(location: 0, length: textView.requiredTextStorage.length)
         if fullRange.length > 0 {
             layoutManager.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
             layoutManager.invalidateDisplay(forCharacterRange: fullRange)
         }
-        if let textContainer = textView.textContainer {
-            layoutManager.ensureLayout(for: textContainer)
-        }
+        layoutManager.ensureLayout(for: textView.requiredTextContainer)
         textView.needsDisplay = true
         textView.window?.invalidateCursorRects(for: textView)
     }
@@ -621,8 +625,8 @@ final class ListItemEditor: NSObject {
             editor.restore(inverse, actionName: actionName)
         }
         textView.undoManager?.setActionName(actionName)
-        textView.textStorage?.setAttributedString(state.content)
-        let storageLength = textView.textStorage?.length ?? 0
+        textView.requiredTextStorage.setAttributedString(state.content)
+        let storageLength = textView.requiredTextStorage.length
         let location = min(state.selection.location, storageLength)
         let length = min(state.selection.length, max(0, storageLength - location))
         textView.setSelectedRange(NSRange(location: location, length: length))

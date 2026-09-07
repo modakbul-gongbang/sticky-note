@@ -21,7 +21,7 @@ let package = Package(
         ),
         .testTarget(
             name: "StickyNotesTests",
-            dependencies: ["StickyNotesCore"],
+            dependencies: ["StickyNotesCore", "StickyNotesApp"],
             path: "Tests/StickyNotesTests"
         ),
     ],
