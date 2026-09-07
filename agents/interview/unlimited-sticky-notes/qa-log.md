@@ -1,11 +1,11 @@
 ---
 topic: "단축키로 꺼내 쓰는 무제한 스티키 노트"
-status: "active"
+status: "complete"
 where: "greenfield"
 selected_packs: "ux,data,operation,verification"
 created_at: "2026-09-07"
 updated_at: "2026-09-07"
-question_count: 16
+question_count: 19
 normalization_policy: "transcript-sync-with-checkpoint-backfill"
 normalization_checkpoint_every: 10
 ---
@@ -26,16 +26,21 @@ normalization_checkpoint_every: 10
 - 이미지는 창 너비에 맞게 표시하고 크기 조절, 삭제, 클릭 확대를 지원한다.
 - 첨부 화면처럼 어두운 작은 창을 사용하고 노트 목록과 기능 메뉴는 필요할 때만 연다.
 - 임시 메모 용도이므로 별도 파일 백업 및 복원 기능은 제외한다. 자동 저장과 휴지통 요구는 유지된다.
-- 사용자 Q16의 종료 의사에 따라 질문은 16개에서 마친다. 추가 제품 선택을 사용자 동의로 꾸미지 않는다.
+- Q17에서 사용자가 남은 결정을 한 번에 질문하여 모두 확정하도록 정정했고, Q18에서 다섯 제안을 항목별로 수락했다. 모든 제품 결정은 해당 답변에 근거한다.
+- 노트가 없으면 빈 편집창으로 시작하고 입력 시 저장한다. 첫 줄이 제목이며 비어 있는 초안은 남기지 않는다.
+- 휴지통 전체 비우기는 확인 후 해당 노트와 이미지를 영구 삭제하고, 취소 시 보존한다.
+- 마우스가 있는 모니터에서 호출하고 창 크기와 화면별 위치를 기억하며 모니터 분리 후 화면 안으로 이동한다.
+- 설치 과정에서 Raycast Notes 단축키만 이전하고 실패 시 복원한다. 상시 설정 관리 및 앱 삭제 시 자동 복원은 하지 않는다.
+- 콘텐츠 전송, 분석, 충돌 보고 및 자동 업데이트 확인 없이 오프라인으로 사용한다.
 - 최종 목표: 이 Mac에서 Option+`로 어디서나 꺼내고 숨길 수 있는 단일 최상위 창에서, 개수 제한 없이 서식과 이미지를 담은 임시 노트를 작성하고 검색하며 로컬에 자동 저장하는 개인용 앱.
 
 ## Intake Cursor
 
-- next_decision_id: D-27
+- next_decision_id: D-28
 - next_question: (owned by the live conversation until checkpoint)
-- last_materiality_sweep: checkpoint 3
-- outstanding_raw_entries: none
-- next_checkpoint_at: Q26
+- last_materiality_sweep: checkpoint 4
+- outstanding_raw_entries: Q19
+- next_checkpoint_at: Q28
 
 ## Transcript Sources
 
@@ -68,11 +73,12 @@ normalization_checkpoint_every: 10
 | D-19 | fact | compatibility | 확인한 사용자 Mac 환경은 macOS 15.1 (24B2083), arm64다. | P1 | local: sw_vers; uname -m (2026-09-07) | resolved | V: 이 환경에서 설치 번들 실행과 네이티브 동작 검증 |
 | D-20 | fact | quality | 공유 원칙은 실패를 외부에서 관찰 가능하게 드러내고 파괴적 동작 전에 결과를 알리도록 요구한다. | P1 | repo: ~/projects/oh-my-principle/engineering/principles.md #4,#10; design/principles.md #6 | resolved | R: 저장 및 이미지 처리 오류 표시, 영구 삭제 결과 안내; V: 실패 조건에서 저장 성공 오표시 없음 |
 | D-21 | fact | verification | 공유 지침은 설치 또는 개발 빌드를 식별하고 정확히 한 앱 인스턴스에서 실제 스크린샷으로 네이티브 UI를 검증하도록 요구한다. | P1 | user: AGENTS.md Desktop App Verification; Q9 개인용 실제 설치 | resolved | V: 설치 및 동작 검증; 사용자 화면 및 재로그인 방해 없이 확인; 미실행 검사 명시 |
-| D-22 | decision | empty state | 첫 노트가 없을 때의 화면과 제목 없는 새 초안의 생성 및 취소 세부 동작은 미결정이다. | P1 | gap-audit findings F1; user Q16 asks to stop questions | deferred | PRD 시작 화면 결정; owner: user; 재검토: PRD 준비 재개 시 |
-| D-23 | decision | destructive lifecycle | 휴지통 복원은 합의했으나 비우기의 확인 및 취소, 전체 또는 개별 영구 삭제 범위와 이미지 정리 세부 정책은 미결정이다. | P0 | gap-audit findings F2,F5,F6; user Q16 asks to stop questions | deferred | 영구 삭제 정책; owner: user; 재검토: PRD 준비 재개 시; 실제 사용자 데이터 삭제 승인은 별개 |
-| D-24 | decision | multi-monitor | 다중 모니터에서 현재 작업 화면을 고르는 기준과 창 위치 규칙은 미결정이다. | P1 | gap-audit findings F3,F9; user Q16 asks to stop questions | deferred | 다중 모니터 위치 정책; owner: user; 재검토: PRD 준비 재개 시 |
-| D-25 | decision | shortcut operation | Raycast 단축키 해제와 새 앱 연결은 승인했으나 변경을 수행하는 주체와 실패 시 복원 정책은 미결정이다. | P1 | gap-audit findings F4,F7; user Q16 asks to stop questions | deferred | 단축키 설정 주체 및 실패 경계; owner: user; 재검토: PRD 준비 재개 시 |
-| D-26 | decision | privacy | 로컬 저장은 합의했으나 외부 통신 및 분석, 충돌 보고, 업데이트 확인 허용 여부는 미결정이다. | P1 | gap-audit findings F8; user Q16 asks to stop questions | deferred | 네트워크 경계; owner: user; 재검토: PRD 준비 재개 시 |
+| D-22 | decision | empty state | 노트가 없으면 빈 편집창을 바로 열고 입력하면 자동 저장한다. 첫 줄을 제목으로 쓰며 아무것도 안 쓴 빈 노트는 남기지 않는다. | P1 | user-accepted recommendation: Q18 | resolved | R: 빈 상태 및 새 초안; V: 첫 호출, 첫 입력 저장, 빈 초안 닫기 |
+| D-23 | decision | destructive lifecycle | 휴지통은 복원과 전체 비우기를 제공한다. 비우기 전에 확인을 받고 확정하면 해당 노트와 첨부 이미지를 영구 삭제하며 취소하면 그대로 둔다. | P0 | user-accepted recommendation: Q18 | resolved | R: 휴지통 및 영구 삭제; V: 확인 취소 보존, 확정 후 노트 및 해당 이미지 제거 |
+| D-24 | decision | multi-monitor | 단축키 호출 시 마우스 포인터가 있는 화면에 표시한다. 창 크기와 화면별 마지막 위치를 기억하며 모니터 분리 시 현재 화면 안으로 옮긴다. | P1 | user-accepted recommendation: Q18 | resolved | R: 창 위치; V: 모니터별 호출 및 위치 복원, 모니터 분리 |
+| D-25 | decision | shortcut operation | 설치 과정에서 기존 Raycast Notes 단축키만 해제하고 새 앱에 연결한다. 연결 실패 시 기존 할당을 복원한다. 새 앱은 Raycast 설정을 상시 관리하거나 앱 삭제 시 자동 복원하지 않는다. | P1 | user-accepted recommendation: Q18 | resolved | R: 설치 시 단축키 이전; V: 연결 성공, 실패 시 기존 할당 복원, 무관한 설정 보존 |
+| D-26 | decision | privacy | 인터넷 연결 없이 동작하며 노트 및 이미지 전송, 분석, 충돌 보고, 자동 업데이트 확인을 하지 않는다. | P1 | user-accepted recommendation: Q18 | resolved | R: 외부 통신 없음; V: 오프라인 사용 및 런타임 네트워크 점검 |
+| D-27 | decision | interview | 남은 결정을 미정으로 끝내지 말고 한 번에 질문하여 모두 결정한다. | P1 | user: Q17 | resolved | 인터뷰 종료 조건: 남은 다섯 항목 Q18에서 확정 |
 
 ## Raw Q&A
 
@@ -159,7 +165,7 @@ normalization_checkpoint_every: 10
 - asked: **전체 화면 앱이나 다른 데스크탑으로 이동했을 때도**, 단축키를 누르면 현재 작업 중인 화면 위에 메모가 나타나야 할까요?
 - recommended: asked에 명시한 동작을 제안했고 사용자가 수락함
 - answer: ㅇㅇㅇ
-- immediate_notes: 전체 화면 앱과 다른 데스크탑에서도 현재 작업 화면에 나타나는 동작을 명시적으로 수락했다. 여러 모니터에서의 위치 선택은 미확정이다.
+- immediate_notes: 전체 화면 앱과 다른 데스크탑에서도 현재 작업 화면에 나타나는 동작을 명시적으로 수락했다. Q18에서 마우스가 있는 화면 호출, 창 크기 및 화면별 위치 기억, 모니터 분리 후 화면 내 이동을 확정했다.
 - needs_normalization: false
 
 ### Q8: 휴지통과 복원
@@ -265,31 +271,89 @@ normalization_checkpoint_every: 10
 - immediate_notes: decision: 별도 백업 및 복원 기능 제외, 질문 종료; reasoning: 임시 메모 용도이고 현재 범위면 충분하다고 사용자 판단; constraints: 자동 저장과 휴지통을 철회하거나 데이터 손실을 허용한 답변이 아님; explicit non-goals: 파일 하나로 전체 백업 및 복원; verified facts: 없음; unresolved follow-up: 누락 검사에 차단점이 있으면 추가 질문 대신 미해결로 보고; source: Q16.
 - needs_normalization: false
 
+### Q17: 미결정 사항 일괄 질문 요청
+- decision_ids: D-27
+- route: user-decision
+- source_ref: codex:01a07b7a-30de-7063-8c65-7aa28f503c76:msg_01a07bae-4fc3-7b40-bc21-4664b8dfd176
+- asked: 네, 핵심 기능은 충분히 정해졌습니다. **백업 기능은 제외하고 인터뷰는 여기서 마쳤습니다.**
+  
+  [인터뷰 기록](/Users/hoyeonlee/projects/sticky-notes/agents/interview/unlimited-sticky-notes/qa-log.md)에 정리하고 커밋했습니다.
+  
+  누락 검사에서 시작 화면·영구 삭제·다중 모니터·단축키 설정 주체·외부 통신이 미결정으로 남아, **PRD 준비 완료 판정은 보류**했습니다. 추가 질문이나 임의 확정은 하지 않았습니다.
+- recommended: none
+- answer: 아니 결정 다해야지. 한번에 무렁봐
+- immediate_notes: decision: 보류 종료 대신 남은 사항을 묶어 모두 결정; reasoning: 사용자가 종료 의도를 정정; constraints: 한 번에 질문; explicit non-goals: 미결정으로 완료 처리; verified facts: 이전 검사는 NEEDS_HUMAN; unresolved follow-up: Q18에서 해결; source: Q17.
+- needs_normalization: false
+
+### Q18: 남은 다섯 정책 항목별 수락
+- decision_ids: D-22, D-23, D-24, D-25, D-26
+- route: user-decision
+- source_ref: codex:01a07b7a-30de-7063-8c65-7aa28f503c76:msg_01a07bae-b469-77f3-bce5-fdd74b5dd7ba
+- asked: 남은 5가지를 한 번에 여쭙겠습니다. 아래처럼 정하면 될까요?
+  
+  1. **첫 화면:** 노트가 없으면 빈 편집창을 바로 열고, 입력하면 자동 저장합니다. 첫 줄을 제목으로 쓰고, 아무것도 안 쓴 빈 노트는 남기지 않습니다.
+  2. **영구 삭제:** 휴지통에서 복원하거나 전체 비우기를 제공합니다. 비우기 전에 확인을 받고, 확정하면 해당 노트와 첨부 이미지까지 영구 삭제합니다. 취소하면 그대로 둡니다.
+  3. **여러 모니터:** 단축키를 누를 때 마우스 포인터가 있는 화면에 표시합니다. 창 크기와 화면별 마지막 위치를 기억하고, 모니터가 분리되면 현재 화면 안으로 옮깁니다.
+  4. **Raycast 단축키:** 설치 과정에서 기존 Notes 단축키만 해제하고 새 앱에 연결합니다. 연결에 실패하면 기존 할당을 복원합니다. 새 앱이 Raycast 설정을 계속 관리하거나 삭제 시 자동 복원하지는 않습니다.
+  5. **외부 통신:** 인터넷 연결 없이 동작하고, 노트·이미지 전송이나 분석·충돌 보고·자동 업데이트 확인도 하지 않습니다.
+  
+  전부 괜찮으면 **“전부 그렇게”**, 바꾸고 싶은 항목이 있으면 번호와 함께 말씀해 주세요.
+- recommended: asked의 다섯 구체적 정책 제안, 사용자 항목별 수락
+- answer: 1 ㅇㅇ 
+  2 ㅇㅇ
+  3 그래
+  4. ㅇㅇ
+  5. ㅇㅇ
+- immediate_notes: decision: asked의 다섯 제안을 모두 항목별로 수락; reasoning: 사용자 명시적 응답; constraints: 빈 초안 미보존, 휴지통 전체 비우기 확인 및 취소, 마우스 화면과 위치 기억, 설치 시 단축키 이전 실패 복원, 외부 통신 없음; explicit non-goals: Raycast 설정 상시 관리 및 삭제 시 자동 복원, 콘텐츠 전송과 분석 및 충돌 보고 및 업데이트 확인; verified facts: 이 답변은 제품 정책 승인이며 실제 설치나 사용자 데이터 삭제를 실행한 증거가 아님; unresolved follow-up: 없음; source: Q18.
+- needs_normalization: false
+
+### Q19: gap-audit human decision bundle (F1, F2, F3, F4, F5, F6, F7, F8, F9)
+- decision_ids: none
+- route: user-decision
+- source_ref: gate:gap-audit:answer:2026-09-07T11:45:36.321Z
+- asked: F1 [P1/empty state] 첫 실행 또는 노트가 0개일 때 Option+` 호출과 새 노트 생성의 구체적인 사용자 흐름이 정의되지 않았다. (빈 상태에서의 표시, 새 노트 진입, 제목 없는 초안의 생성·저장·취소 동작을 명시한다.)
+  F2 [P1/destructive recovery] 휴지통 비우기라는 영구 삭제의 범위, 확인·취소 동작, 삭제 후 결과가 사용자 승인 없이 미정이다. (휴지통 전체 비우기와 개별 영구 삭제 여부, 경고 문구, 확인·취소 및 복구 불가 결과를 명시한다.)
+  F3 [P1/multi-monitor behavior] 여러 모니터 환경에서 현재 작업 화면에 메모 창을 표시할 모니터와 위치 규칙이 정의되지 않았다. (포커스된 앱이 있는 모니터, 주 모니터, 마지막 표시 모니터 중 어떤 규칙을 사용할지 결정한다.)
+  F4 [P1/external provider] Q11 authorizes changing the Raycast Notes shortcut but does not define whether the app edits Raycast settings or the user does, what permissions or missing-provider failures mean, or whether the original shortcut is restored when disabled or uninstalled. (Define the Raycast integration boundary, required permissions, failure behavior, and shortcut rollback lifecycle explicitly.)
+  F5 [P1/data lifecycle] The log requires restoring formatting and images from the trash but leaves the permanent-empty operation and attachment lifecycle unresolved, including whether associated images are irreversibly purged and how that result is confirmed. (Specify trash-empty behavior and the invariant that a note's text and images remain restorable until emptying, then are permanently deleted with clear confirmation.)
+  F6 [P0/destructive lifecycle] 휴지통 비우기와 영구 삭제가 실제 범위인지, 실행 전 확인과 이미지 포함 데이터의 비가역 삭제 결과가 정의되지 않았고 영구 삭제 권한은 명시적으로 승인되지 않았다. (영구 삭제 기능의 범위와 확인 UX를 사용자가 승인하거나, 명확한 재검토 조건과 함께 PRD 범위에서 제외하라.)
+  F7 [P1/external shortcut operation] Raycast 단축키 해제 후 새 단축키 등록이 실패하거나 Raycast에 접근할 수 없을 때 기존 단축키를 복원할지 여부와 부분 변경 상태가 정의되지 않았다. (등록 순서, 실패 시 롤백 또는 기존 설정 유지 정책, 사용자에게 표시할 결과를 명시하고 해당 실패 경로의 검증 증거를 계획하라.)
+  F8 [P1/privacy boundary] 노트와 이미지를 로컬에 저장한다는 결정만 있고 네트워크 전송, 분석·충돌 보고, 업데이트 확인 등 외부로 데이터가 나갈 수 있는 경계가 정의되지 않았다. (노트 콘텐츠의 외부 전송 금지와 허용 가능한 네트워크 동작 및 권한 범위를 명시적으로 승인하라.)
+  F9 [P1/multi-monitor behavior] 전체 화면과 Spaces 호출은 정해졌지만 여러 모니터에서 어느 화면에 창을 표시하고 Space 전환 시 어떻게 배치할지 결정되지 않았다. (활성 앱·마우스·현재 Space 중 기준을 사용자가 선택하고 다중 모니터 호출 및 재배치 검증을 계획하라.)
+- recommended: none
+- answer: 1 ㅇㅇ 
+  2 ㅇㅇ
+  3 그래
+  4. ㅇㅇ
+  5. ㅇㅇ
+- immediate_notes: Recorded by sasu gate answer from the user's own words; normalize the decisions it carries into the Decision Register.
+- needs_normalization: true
+
 ## UX Scenario Cards
 
 ### UX-01: 작업 중 메모 호출
 - trigger: 다른 앱에서 Option+` 입력.
 - happy path: 현재 작업 화면에 마지막 노트가 나타나고 다른 앱을 클릭해도 위에 유지되며 같은 단축키로 숨긴다.
 - state / failure: 전역 단축키 충돌, 전체 화면이나 다른 Space에서 호출되지 않음.
-- recovery: Q11에 따라 Raycast Notes의 기존 단축키를 해제하고 새 앱에 연결한다. 등록 실패는 원인을 드러내며 자동으로 다른 단축키를 선택하지 않는다.
-- proof: 설치된 단일 앱 인스턴스로 일반 앱, 전체 화면, Space 이동 후 실제 호출 및 숨김을 확인하고 스크린샷을 남긴다.
-- linked decisions: D-03, D-08, D-09, D-12, D-13, D-20, D-21
+- recovery: 설치 과정에서 기존 Raycast Notes 단축키만 해제하고 새 앱에 연결한다. 등록 실패는 원인을 드러내고 기존 할당을 복원한다. 앱은 상시 Raycast 설정을 관리하지 않으며 삭제 시 자동 복원하지 않는다.
+- proof: 설치된 단일 앱 인스턴스로 일반 앱, 전체 화면, Space 이동 후 실제 호출 및 숨김을 확인하고 스크린샷을 남긴다. 다중 모니터에서는 마우스 화면 호출, 크기 및 화면별 위치 복원, 모니터 분리 후 화면 내 위치를 확인한다.
+- linked decisions: D-03, D-08, D-09, D-12, D-13, D-20, D-21, D-24, D-25
 
 ### UX-02: 노트 편집과 전환
 - trigger: 노트를 선택하거나 새 메모를 작성.
 - happy path: 빈 상태에서 새 노트를 만들고 단일 창에서 서식 텍스트와 이미지를 편집한다. 제목 또는 본문 검색과 최근 수정순 목록으로 다른 노트를 선택했다 돌아와도 내용이 보존된다.
 - state / failure: 첫 실행의 빈 목록, 검색 결과 없음, 이미지 붙여넣기 실패, 저장 실패, 디스크 공간 부족.
-- recovery: 빈 목록에서는 새 노트 생성 흐름이 도달 가능해야 한다. 검색을 지우면 노트 목록으로 돌아간다. 오류를 드러내고 기존의 정상 저장 내용을 훼손하거나 저장 성공으로 오인시키지 않는다.
+- recovery: 노트가 없으면 빈 편집창을 바로 보여주고 입력 시 첫 줄을 제목으로 저장하며 아무것도 입력하지 않은 초안은 남기지 않는다. 검색을 지우면 노트 목록으로 돌아간다. 오류를 드러내고 기존의 정상 저장 내용을 훼손하거나 저장 성공으로 오인시키지 않는다.
 - proof: 한글 조합 입력, 서식, 실제 클립보드 이미지, 6개 이상 노트 생성, 전환 후 재열기, 앱 재시작으로 확인.
-- linked decisions: D-02, D-04, D-05, D-06, D-07, D-14, D-15, D-16, D-20
+- linked decisions: D-02, D-04, D-05, D-06, D-07, D-14, D-15, D-16, D-20, D-22, D-26
 
 ### UX-03: 삭제한 메모 복구
 - trigger: 노트 삭제 후 휴지통 열기.
 - happy path: 삭제한 노트를 찾아 복원하고 원래 서식과 이미지를 다시 본다.
 - state / failure: 휴지통이 비어 있음, 영구 삭제의 되돌릴 수 없음.
-- recovery: 직접 비우기 전에는 복원 가능하다. 휴지통 비우기 전에는 복구할 수 없다는 결과를 분명히 알린다(D-20). 실제 사용자 노트 영구 삭제는 검증에 사용하지 않는다.
-- proof: 이미지 포함 노트를 삭제한 뒤 앱을 재실행하고 복원해 원본 내용과 비교.
-- linked decisions: D-05, D-07, D-10, D-20
+- recovery: 직접 비우기 전에는 복원 가능하다. 휴지통 전체 비우기 전에 노트와 첨부 이미지가 영구 삭제된다는 확인을 받고, 취소하면 모두 보존한다. 실제 사용자 노트 영구 삭제는 검증에 사용하지 않는다.
+- proof: 이미지 포함 테스트 노트를 삭제한 뒤 앱을 재실행하고 복원해 원본 내용과 비교한다. 별도 테스트 데이터로 비우기 확인의 취소 시 보존과 확정 시 해당 노트 및 이미지 영구 삭제를 검증한다.
+- linked decisions: D-05, D-07, D-10, D-20, D-23
 
 ### UX-04: 설치와 로그인 이후 사용
 - trigger: 사용자 Mac에 설치하고 로그인.
@@ -313,7 +377,7 @@ normalization_checkpoint_every: 10
 - 공유 원칙의 적용: engineering #4 및 #10에 따라 저장과 이미지 처리 실패를 숨기지 않는다. design #6에 따라 영구 삭제 전에 결과를 알린다.
 - 구현 단계의 일반 품질 검증: 한글 IME 조합, 실행 취소 및 다시 실행, 키보드 탐색과 포커스, 아이콘 접근성 이름, 읽을 수 있는 대비, 창 크기 변경 시 편집 및 이미지 표시를 확인한다. 이들은 별도 기능 확장이 아니라 합의한 편집 흐름의 정상 사용 검증이다.
 - 노트 개수 무제한은 제품 차원의 개수 제한이 없다는 의미다. 메모리나 디스크가 무한하다는 보장을 만들지 않고 다수 노트 및 이미지에서 응답성과 자원 부족 실패 처리를 검증한다.
-- 미선택 세부 사항: 앱 이름, 정확한 창 크기, 제목 편집 제스처와 툴바 위치는 PRD 또는 디자인 단계의 제안 사항으로 남긴다. 사용자 승인 사실로 기록하지 않는다.
+- 미선택 세부 사항: 앱 이름, 정확한 창 크기, 툴바 위치는 PRD 또는 디자인 단계의 제안 사항으로 남긴다. 사용자 승인 사실로 기록하지 않는다.
 
 ## Documented Domain Checks
 
@@ -347,6 +411,13 @@ normalization_checkpoint_every: 10
 - reopened_decisions: none
 - highest_remaining_gap: D-22~D-26 미결정으로 PRD-ready 판정 보류. 재개 시 사용자 판단 필요.
 
+### Checkpoint 4
+- after_question: Q18
+- normalized_entries: Q17, Q18
+- register_changes: Q17의 일괄 결정 요청과 Q18의 다섯 항목 수락 반영. D-22~D-26 모두 resolved, UX 및 실패·취소·복원 정책 갱신.
+- reopened_decisions: none
+- highest_remaining_gap: 추가 미결정 없음. NEEDS_HUMAN 항목 전체에 대한 명시적 답변을 gate answer로 기록한다.
+
 ## Audit History
 
 ### Audit 1
@@ -365,3 +436,13 @@ normalization_checkpoint_every: 10
   F9 [P1/multi-monitor behavior] 전체 화면과 Spaces 호출은 정해졌지만 여러 모니터에서 어느 화면에 창을 표시하고 Space 전환 시 어떻게 배치할지 결정되지 않았다.
 - warnings: none
 - artifact: agents/runs/unlimited-sticky-notes/gates/artifacts/gap-audit-2026-09-07T11-39-04-946Z-b08d09c3.json
+
+### Audit 2
+- type: gap-audit-gate
+- at: 2026-09-07T11:45:36.326Z
+- cycle: 1
+- result: answered
+- open findings: none
+- warnings: none
+- artifact: none
+- note: Q19 records the user's answer to the bundle
