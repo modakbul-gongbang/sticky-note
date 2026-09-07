@@ -5,7 +5,7 @@ where: "greenfield"
 selected_packs: "ux,data,operation,verification"
 created_at: "2026-09-07"
 updated_at: "2026-09-07"
-question_count: 19
+question_count: 20
 normalization_policy: "transcript-sync-with-checkpoint-backfill"
 normalization_checkpoint_every: 10
 ---
@@ -38,9 +38,9 @@ normalization_checkpoint_every: 10
 
 - next_decision_id: D-28
 - next_question: (owned by the live conversation until checkpoint)
-- last_materiality_sweep: checkpoint 4
-- outstanding_raw_entries: Q19
-- next_checkpoint_at: Q28
+- last_materiality_sweep: checkpoint 5
+- outstanding_raw_entries: Q20
+- next_checkpoint_at: Q30
 
 ## Transcript Sources
 
@@ -326,7 +326,17 @@ normalization_checkpoint_every: 10
   3 그래
   4. ㅇㅇ
   5. ㅇㅇ
-- immediate_notes: Recorded by sasu gate answer from the user's own words; normalize the decisions it carries into the Decision Register.
+- immediate_notes: Q18의 동일한 사용자 답변을 gap-audit의 F1-F9에 연결해 기록한 항목이다. D-22-D-26이 빈 상태, 영구 삭제, 다중 모니터, 단축키 이전, 외부 통신 정책을 각각 보존한다. 새로운 결정은 추가하지 않는다.
+- needs_normalization: false
+
+### Q20: gap-audit reopen
+- decision_ids: none
+- route: user-decision
+- source_ref: gate:gap-audit:reopen:2026-09-07T11:54:15.118Z
+- asked: The gap-audit review cycle was reopened on the user's request; what changed?
+- recommended: none
+- answer: 이거 바탕으로 쭉 작업해줘
+- immediate_notes: Recorded by sasu gate reopen from the user's own words; normalize the decisions it carries into the Decision Register before re-running the gate.
 - needs_normalization: true
 
 ## UX Scenario Cards
@@ -418,6 +428,13 @@ normalization_checkpoint_every: 10
 - reopened_decisions: none
 - highest_remaining_gap: 추가 미결정 없음. NEEDS_HUMAN 항목 전체에 대한 명시적 답변을 gate answer로 기록한다.
 
+### Checkpoint 5
+- after_question: Q20
+- normalized_entries: Q19
+- register_changes: Q19는 Q18 답변을 gap-audit F1-F9에 연결한 중복 근거로 정리하며 새 결정은 추가하지 않음
+- reopened_decisions: none
+- highest_remaining_gap: 없음
+
 ## Audit History
 
 ### Audit 1
@@ -446,3 +463,22 @@ normalization_checkpoint_every: 10
 - warnings: none
 - artifact: none
 - note: Q19 records the user's answer to the bundle
+
+### Audit 3
+- type: gap-audit-gate
+- at: 2026-09-07T11:54:15.118Z
+- cycle: 2
+- result: reopened
+- open findings: none
+- warnings: none
+- artifact: none
+- note: Q20 records the user's change request
+
+### Audit 4
+- type: gap-audit-gate
+- at: 2026-09-07T11:55:04.451Z
+- cycle: 2
+- result: pass
+- open findings: none
+- warnings: none
+- artifact: agents/runs/unlimited-sticky-notes/gates/artifacts/gap-audit-2026-09-07T11-55-04-452Z-bc8b1f4c.json

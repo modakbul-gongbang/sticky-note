@@ -12,5 +12,11 @@
     "copy": [],
     "setup": []
   },
+  "verify": {
+    "commands": {
+      "test": "swift test"
+    },
+    "commandTimeoutMs": 600000
+  },
   "principles": ["~/projects/oh-my-principle"]
 }
