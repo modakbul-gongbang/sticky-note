@@ -1,0 +1,4 @@
+# PRD pipeline runtime state
+agents/runs/
+agents/quick/
+agents/interview/*/.cadence.json

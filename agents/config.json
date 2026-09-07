@@ -1,0 +1,16 @@
+{
+  "delivery": {
+    "mode": "local",
+    "ci": {
+      "maxFixAttempts": 2,
+      "timeoutSeconds": 240
+    }
+  },
+  "worktree": {
+    "enabled": false,
+    "link": [],
+    "copy": [],
+    "setup": []
+  },
+  "principles": ["~/projects/oh-my-principle"]
+}
