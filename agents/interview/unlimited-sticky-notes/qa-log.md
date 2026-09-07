@@ -482,3 +482,21 @@ normalization_checkpoint_every: 10
 - open findings: none
 - warnings: none
 - artifact: agents/runs/unlimited-sticky-notes/gates/artifacts/gap-audit-2026-09-07T11-55-04-452Z-bc8b1f4c.json
+
+### Audit 5
+- type: spec-gate
+- at: 2026-09-07T12:09:45.683Z
+- cycle: 1
+- result: block
+- open findings: F1 [P1/verification] B13 requires that duplicate launches do not split note state, but its verification only checks the existing process and menu bar, without attempting a duplicate launch or observing state convergence.
+- warnings: F2 [P2/testability] B16 uses non-testable acceptance language such as “읽을 수 있는 대비” and “편집 흐름을 깨뜨리지 않는다” without observable pass conditions.
+- artifact: agents/runs/unlimited-sticky-notes/gates/artifacts/spec-2026-09-07T12-09-45-684Z-360a0fc9.json
+
+### Audit 6
+- type: spec-gate
+- at: 2026-09-07T12:10:49.846Z
+- cycle: 1
+- result: pass
+- open findings: none
+- warnings: none
+- artifact: agents/runs/unlimited-sticky-notes/gates/artifacts/spec-2026-09-07T12-10-49-848Z-d9e30b9e.json
