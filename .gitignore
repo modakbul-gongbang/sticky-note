@@ -2,3 +2,10 @@
 agents/runs/
 agents/quick/
 agents/interview/*/.cadence.json
+
+# Swift build products and local app bundles
+.build/
+build/
+
+# Local QA evidence
+artifacts/
