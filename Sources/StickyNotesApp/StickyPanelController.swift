@@ -22,6 +22,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private let sidebar = NSVisualEffectView()
     private let formatOverlay = NSVisualEffectView()
     private let noteSwitchOverlay = NSVisualEffectView()
+    private let headerTitleLabel = NSTextField(labelWithString: "")
     private let noteSwitchTitleLabel = NSTextField(labelWithString: "")
     private let noteSwitchPositionLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
@@ -281,8 +282,10 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     private func configurePanel() {
-        panel.title = "새 노트"
-        panel.titleVisibility = .visible
+        applyTitle("새 노트")
+        // The system title is drawn inside the titlebar strip, which sits above the header row
+        // of a full-size-content window; the header's own centred label carries the title instead.
+        panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isMovableByWindowBackground = true
         panel.standardWindowButton(.closeButton)?.isHidden = true
@@ -307,6 +310,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         root.layer?.backgroundColor = NSColor(calibratedRed: 0.052, green: 0.055, blue: 0.062, alpha: 1).cgColor
         panel.contentView = root
 
+        configureHeaderTitleLabel()
         let header = makeHeader()
         let formatButton = makeFooterFormatButton()
         let editorScroll = NSScrollView()
@@ -423,13 +427,36 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         header.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(listButton)
         header.addSubview(newButton)
+        header.addSubview(headerTitleLabel)
         NSLayoutConstraint.activate([
             listButton.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             listButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             newButton.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             newButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            headerTitleLabel.centerXAnchor.constraint(equalTo: header.centerXAnchor),
+            headerTitleLabel.centerYAnchor.constraint(equalTo: listButton.centerYAnchor),
+            headerTitleLabel.leadingAnchor.constraint(
+                greaterThanOrEqualTo: listButton.trailingAnchor,
+                constant: 10
+            ),
+            headerTitleLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: newButton.leadingAnchor,
+                constant: -10
+            ),
         ])
         return header
+    }
+
+    private func configureHeaderTitleLabel() {
+        headerTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        headerTitleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        headerTitleLabel.textColor = NSColor(calibratedWhite: 0.72, alpha: 1)
+        headerTitleLabel.alignment = .center
+        headerTitleLabel.lineBreakMode = .byTruncatingTail
+        headerTitleLabel.maximumNumberOfLines = 1
+        headerTitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        headerTitleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        headerTitleLabel.setAccessibilityLabel("현재 노트 제목")
     }
 
     private func makeFooterFormatButton() -> NSButton {
@@ -702,9 +729,16 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     @objc private func trashCurrentFromMenu() { closeOverlays(); trashCurrent() }
 
     private func updateTitle() {
-        panel.title = NoteContent.isEmpty(editor.attributedString())
+        applyTitle(NoteContent.isEmpty(editor.attributedString())
             ? "새 노트"
-            : NoteContent.title(from: editor.attributedString())
+            : NoteContent.title(from: editor.attributedString()))
+    }
+
+    /// The window title and the header label are one value; setting them apart would let the
+    /// visible title drift from the one the note-switch overlay and the window menu report.
+    private func applyTitle(_ title: String) {
+        panel.title = title
+        headerTitleLabel.stringValue = title
     }
 
     private func updateWordCount() {
@@ -828,7 +862,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             let normalizedAppearance = replaceEditorContent(with: note.content)
             editor.isEditable = !note.metadata.isTrashed
             reloadRows(selecting: id)
-            panel.title = note.metadata.title
+            applyTitle(note.metadata.title)
             if normalizedAppearance, editor.isEditable {
                 saveNow()
                 showStatus("노트 서식을 정리해 저장했습니다.", isError: false)

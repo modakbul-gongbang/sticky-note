@@ -229,6 +229,53 @@ import Testing
         #expect(sidebar.isHidden)
     }
 
+    @Test func headerTitleIsCentredOnTheToolbarRowAndTracksTheNote() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
+        let window = try #require(controller.window)
+        let contentView = try #require(window.contentView)
+        contentView.layoutSubtreeIfNeeded()
+        let descendants = recursiveSubviews(of: contentView)
+        let title = try #require(descendants.compactMap { $0 as? NSTextField }.first {
+            $0.accessibilityLabel() == "현재 노트 제목"
+        })
+        let listButton = try #require(descendants.compactMap { $0 as? NSButton }.first {
+            $0.accessibilityLabel() == "노트 목록 열기 또는 닫기"
+        })
+        let newButton = try #require(descendants.compactMap { $0 as? NSButton }.first {
+            $0.accessibilityLabel() == "새 노트"
+        })
+
+        // A label's alignment rect is inset by a point from its frame, so exact-centre
+        // comparisons against a button frame carry that much slack.
+        let titleBox = title.convert(title.bounds, to: contentView)
+        let listBox = listButton.convert(listButton.bounds, to: contentView)
+        let newBox = newButton.convert(newButton.bounds, to: contentView)
+        #expect(window.titleVisibility == .hidden)
+        #expect(title.stringValue == "새 노트")
+        #expect(abs(titleBox.midY - listBox.midY) <= 1)
+        #expect(abs(titleBox.midY - newBox.midY) <= 1)
+        #expect(abs(titleBox.midX - contentView.bounds.midX) <= 1)
+        #expect(titleBox.minX >= listBox.maxX)
+        #expect(titleBox.maxX <= newBox.minX)
+
+        let editor = try #require(descendants.compactMap { $0 as? RichTextView }.first)
+        let longTitle = String(repeating: "아주 긴 제목 ", count: 12)
+        editor.insertText(longTitle, replacementRange: NSRange(location: NSNotFound, length: 0))
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+        contentView.layoutSubtreeIfNeeded()
+
+        let longTitleBox = title.convert(title.bounds, to: contentView)
+        #expect(title.stringValue == window.title)
+        #expect(title.stringValue.hasPrefix("아주 긴 제목"))
+        #expect(longTitleBox.minX >= listBox.maxX)
+        #expect(longTitleBox.maxX <= newBox.minX)
+    }
+
     private func recursiveSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap(recursiveSubviews(of:))
     }

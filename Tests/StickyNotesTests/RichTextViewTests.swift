@@ -173,6 +173,75 @@ import Testing
         #expect(foundLink)
     }
 
+    private func sampleImage() -> NSImage {
+        let image = NSImage(size: NSSize(width: 12, height: 8))
+        image.lockFocus()
+        NSColor.systemTeal.setFill()
+        NSRect(x: 0, y: 0, width: 12, height: 8).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    @Test func clickingAnImagePlacesItOnTheClipboardAsAnImage() throws {
+        let editor = configuredEditor()
+        editor.insertText("메모\n", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.insertImage(sampleImage())
+        let imageLocation = (editor.string as NSString).range(of: "\u{FFFC}").location
+        #expect(imageLocation != NSNotFound)
+
+        // A click resolves to a zero-length range on the image; the editor turns it into a
+        // selection of the image itself.
+        let selection = editor.selectionRange(
+            forProposedRange: NSRange(location: imageLocation, length: 0),
+            granularity: .selectByCharacter
+        )
+        #expect(selection == NSRange(location: imageLocation, length: 1))
+
+        editor.setSelectedRange(selection)
+        let pasteboard = NSPasteboard(name: .init("StickyNotesTests.Image.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+
+        #expect(editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes))
+
+        #expect(editor.writablePasteboardTypes.first == .png)
+        let copied = try #require(NSImage(pasteboard: pasteboard))
+        #expect(copied.size.width > 0)
+        #expect(pasteboard.data(forType: .png) != nil)
+    }
+
+    @Test func copyingAnImageTogetherWithTextStaysARichTextCopy() throws {
+        let editor = configuredEditor()
+        editor.insertImage(sampleImage())
+        editor.insertText("설명 문장", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.setSelectedRange(NSRange(location: 0, length: editor.requiredTextStorage.length))
+
+        let types = editor.writablePasteboardTypes
+        #expect(!types.contains(.png))
+        #expect(!types.contains(.tiff))
+
+        let pasteboard = NSPasteboard(name: .init("StickyNotesTests.Mixed.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        #expect(editor.writeSelection(to: pasteboard, types: types))
+        #expect(pasteboard.string(forType: .string)?.contains("설명 문장") == true)
+    }
+
+    @Test func draggingAcrossImagesAndTextKeepsTheWholeRange() {
+        let editor = configuredEditor()
+        editor.insertImage(sampleImage())
+        editor.insertText("가운데", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.insertImage(sampleImage())
+        let wholeDocument = NSRange(location: 0, length: editor.requiredTextStorage.length)
+
+        let dragged = editor.selectionRange(
+            forProposedRange: wholeDocument,
+            granularity: .selectByCharacter
+        )
+
+        #expect(dragged == wholeDocument)
+    }
+
     @Test func automaticURLDetectionIsEnabled() {
         let editor = configuredEditor()
         #expect(editor.isAutomaticLinkDetectionEnabled)

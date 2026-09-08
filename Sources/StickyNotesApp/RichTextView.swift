@@ -221,14 +221,49 @@ final class RichTextView: NSTextView {
             }
             return
         }
-        if let (index, attachment) = attachment(at: event) {
+        if event.clickCount == 2, let (index, attachment) = attachment(at: event) {
             setSelectedRange(NSRange(location: index, length: 1))
-            if event.clickCount == 2, let image = attachment.image {
+            if let image = image(of: attachment) {
                 onAttachmentDoubleClick?(image)
             }
             return
         }
+        // Single clicks and drags go to NSTextView's own tracking loop, so dragging across
+        // several images and their text keeps working; `selectionRange(forProposedRange:...)`
+        // turns the click that lands on an image into a selection of that image.
         super.mouseDown(with: event)
+    }
+
+    override func selectionRange(
+        forProposedRange proposedCharRange: NSRange,
+        granularity: NSSelectionGranularity
+    ) -> NSRange {
+        let range = super.selectionRange(forProposedRange: proposedCharRange, granularity: granularity)
+        guard granularity == .selectByCharacter,
+              proposedCharRange.length == 0,
+              range.length == 0,
+              range.location < requiredTextStorage.length,
+              requiredTextStorage.attribute(.attachment, at: range.location, effectiveRange: nil) is NSTextAttachment else {
+            return range
+        }
+        return NSRange(location: range.location, length: 1)
+    }
+
+    override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        guard selectedImageForPasteboard() != nil else { return super.writablePasteboardTypes }
+        return [.png, .tiff] + super.writablePasteboardTypes
+    }
+
+    override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard type == .png || type == .tiff else {
+            return super.writeSelection(to: pboard, type: type)
+        }
+        guard let image = selectedImageForPasteboard(),
+              let data = bitmapData(of: image, type: type) else {
+            return false
+        }
+        pboard.setData(data, forType: type)
+        return true
     }
 
     func insertListItem(_ kind: ListItemKind) {
@@ -250,7 +285,7 @@ final class RichTextView: NSTextView {
     }
 
     func resizeSelectedImage(fraction: CGFloat) -> Bool {
-        guard let attachment = selectedAttachment(), let image = attachment.image else { return false }
+        guard let attachment = selectedAttachment(), let image = image(of: attachment) else { return false }
         attachment.bounds = fittedBounds(for: image, fraction: fraction)
         didChangeText()
         needsDisplay = true
@@ -262,6 +297,46 @@ final class RichTextView: NSTextView {
         requiredTextStorage.deleteCharacters(in: selectedRange())
         didChangeText()
         return true
+    }
+
+    /// The image the current selection stands for on the pasteboard: exactly one attachment,
+    /// with nothing but whitespace around it. A selection that mixes an image with real text
+    /// stays a rich-text copy, because a pasteboard image would drop that text.
+    private func selectedImageForPasteboard() -> NSImage? {
+        let range = selectedRange()
+        let storage = requiredTextStorage
+        guard range.length > 0, NSMaxRange(range) <= storage.length else { return nil }
+        let text = storage.string as NSString
+        var found: NSImage?
+        for location in range.location..<NSMaxRange(range) {
+            if let attachment = storage.attribute(.attachment, at: location, effectiveRange: nil) as? NSTextAttachment {
+                guard found == nil, let image = image(of: attachment) else { return nil }
+                found = image
+                continue
+            }
+            let character = text.substring(with: NSRange(location: location, length: 1))
+            guard character.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        }
+        return found
+    }
+
+    /// Attachments typed in this session carry `image`; attachments read back from a stored
+    /// RTFD carry only their file contents, so both sources must resolve to an image.
+    private func image(of attachment: NSTextAttachment) -> NSImage? {
+        if let image = attachment.image { return image }
+        if let data = attachment.contents, let image = NSImage(data: data) { return image }
+        if let data = attachment.fileWrapper?.regularFileContents, let image = NSImage(data: data) { return image }
+        return nil
+    }
+
+    private func bitmapData(of image: NSImage, type: NSPasteboard.PasteboardType) -> Data? {
+        guard let representation = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first
+            ?? image.tiffRepresentation.flatMap({ NSBitmapImageRep(data: $0) }) else {
+            return nil
+        }
+        return type == .png
+            ? representation.representation(using: .png, properties: [:])
+            : representation.representation(using: .tiff, properties: [:])
     }
 
     private func selectedAttachment() -> NSTextAttachment? {
