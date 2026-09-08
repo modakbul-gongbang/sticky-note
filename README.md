@@ -3,6 +3,22 @@
 개인 Mac에서 `Option+\``로 꺼내 쓰는 로컬 전용 AppKit 스티키 노트 앱입니다.
 노트 수에 제품 제한을 두지 않으며 서식과 이미지를 RTFD 패키지로, 검색 메타데이터를 원자적 JSON 인덱스로 Application Support에 저장합니다.
 
+<p align="center">
+  <img src="docs/screenshots/editor.png" alt="Sticky Notes 편집 화면" width="420">
+</p>
+
+## 주요 기능
+
+- `Option+\``로 어디서든 노트를 열고 숨깁니다.
+- `Control+Tab`과 `Control+Shift+Tab`으로 노트를 빠르게 전환합니다.
+- 체크리스트, 불릿, 번호 목록, 링크, 굵게, 이미지 붙여넣기를 지원합니다.
+- 노트와 휴지통을 한 화면에서 검색하고 관리합니다.
+- 모든 노트는 이 Mac에만 저장됩니다.
+
+| 빠른 노트 전환 | 노트 검색과 관리 |
+| --- | --- |
+| <img src="docs/screenshots/note-switcher.png" alt="노트 전환 알림" width="360"> | <img src="docs/screenshots/note-browser.png" alt="노트 검색 화면" width="360"> |
+
 ## 빌드와 설치
 
 ```sh
