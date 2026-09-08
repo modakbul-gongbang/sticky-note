@@ -122,8 +122,17 @@ final class RichTextView: NSTextView {
     }
 
     override func paste(_ sender: Any?) {
-        if let image = NSImage(pasteboard: .general) {
+        let pasteboard = NSPasteboard.general
+        if let image = NSImage(pasteboard: pasteboard) {
             insertImage(image)
+            return
+        }
+        if let type = pasteboard.availableType(from: [.rtfd, .rtf, .html]),
+           readSelection(from: pasteboard, type: type) {
+            return
+        }
+        if let value = pasteboard.string(forType: .string) {
+            insertNormalizedPaste(NSAttributedString(string: value))
             return
         }
         super.paste(sender)
@@ -135,16 +144,14 @@ final class RichTextView: NSTextView {
               let data = pasteboard.data(forType: type),
               let source = try? NSAttributedString(
                   data: data,
-                  options: [.documentType: documentType],
+                  options: documentReadingOptions(for: documentType),
                   documentAttributes: nil
               ) else {
             let inserted = super.readSelection(from: pasteboard, type: type)
             if inserted { detectURLs() }
             return inserted
         }
-        let normalized = listItemEditor.normalizedContent(source)
-        super.insertText(normalized, replacementRange: selectedRange())
-        detectURLs()
+        insertNormalizedPaste(source)
         return true
     }
 
@@ -378,6 +385,24 @@ final class RichTextView: NSTextView {
         case .html: .html
         default: nil
         }
+    }
+
+    private func documentReadingOptions(
+        for documentType: NSAttributedString.DocumentType
+    ) -> [NSAttributedString.DocumentReadingOptionKey: Any] {
+        var options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
+            .documentType: documentType,
+        ]
+        if documentType == .html {
+            options[.characterEncoding] = String.Encoding.utf8.rawValue
+        }
+        return options
+    }
+
+    private func insertNormalizedPaste(_ source: NSAttributedString) {
+        let normalized = listItemEditor.normalizedContent(source)
+        super.insertText(normalized, replacementRange: selectedRange())
+        detectURLs()
     }
 
     private func disableSystemTextTransformations() {

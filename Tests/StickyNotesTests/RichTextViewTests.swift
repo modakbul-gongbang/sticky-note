@@ -138,6 +138,41 @@ import Testing
         #expect(attributes[.underlineStyle] == nil)
     }
 
+    @Test func notionStyleHTMLPasteKeepsMeaningAndUsesEditorAppearance() throws {
+        let editor = configuredEditor()
+        let pasteboard = NSPasteboard(name: .init("StickyNotesTests.HTML.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        let html = """
+        <html><body style="font-family: Georgia; font-size: 29px; color: #111111; background: white">
+        <p style="margin: 24px 0"><strong>Notion 붙여넣기 검증</strong></p>
+        <p>검은 원본 글자도 앱 색상으로 보여야 합니다.</p>
+        <p><a href="https://example.com">https://example.com</a></p>
+        </body></html>
+        """
+        pasteboard.setData(try #require(html.data(using: .utf8)), forType: .html)
+
+        #expect(editor.readSelection(from: pasteboard, type: .html))
+        #expect(editor.string.contains("Notion 붙여넣기 검증"))
+        #expect(editor.string.contains("검은 원본 글자도 앱 색상으로 보여야 합니다."))
+        #expect(editor.string.contains("https://example.com"))
+
+        let fullRange = NSRange(location: 0, length: editor.requiredTextStorage.length)
+        var foundBold = false
+        var foundLink = false
+        editor.requiredTextStorage.enumerateAttributes(in: fullRange) { attributes, _, _ in
+            if let font = attributes[.font] as? NSFont {
+                #expect(font.pointSize == 17)
+                foundBold = foundBold || NSFontManager.shared.traits(of: font).contains(.boldFontMask)
+            }
+            #expect((attributes[.foregroundColor] as? NSColor) == editor.textColor)
+            #expect(attributes[.backgroundColor] == nil)
+            if attributes[.link] != nil { foundLink = true }
+        }
+        #expect(foundBold)
+        #expect(foundLink)
+    }
+
     @Test func automaticURLDetectionIsEnabled() {
         let editor = configuredEditor()
         #expect(editor.isAutomaticLinkDetectionEnabled)

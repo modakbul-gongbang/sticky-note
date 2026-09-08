@@ -110,6 +110,15 @@ import Testing
         #expect(editor.string == "노트 3")
         controller.showPreviousNote()
         #expect(editor.string == "노트 2")
+        let contentView = try #require(controller.window?.contentView)
+        contentView.layoutSubtreeIfNeeded()
+        let switchOverlay = try #require(recursiveSubviews(of: contentView).first {
+            $0.accessibilityLabel() == "노트 전환 안내"
+        })
+        let switchLabels = recursiveSubviews(of: switchOverlay).compactMap { $0 as? NSTextField }
+        #expect(!switchOverlay.isHidden)
+        #expect(switchLabels.first { $0.accessibilityLabel() == "전환된 노트 제목" }?.stringValue == "노트 2")
+        #expect(switchLabels.first { $0.accessibilityLabel() == "노트 순서" }?.stringValue == "2 / 3")
         controller.showPreviousNote()
         #expect(editor.string == "노트 1")
         controller.showPreviousNote()
