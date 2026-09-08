@@ -1,9 +1,20 @@
 import AppKit
 import StickyNotesCore
 
+final class DismissiblePanel: NSPanel {
+    var handleOverlayMouseDown: ((NSPoint) -> Void)?
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .otherMouseDown {
+            handleOverlayMouseDown?(event.locationInWindow)
+        }
+        super.sendEvent(event)
+    }
+}
+
 final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private let repository: NoteRepository
-    private let panel: NSPanel
+    private let panel: DismissiblePanel
     private let editor = RichTextView()
     private let tableView = NSTableView()
     private let searchField = NSSearchField()
@@ -22,10 +33,14 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private var suppressChanges = false
     private var isRefreshingRows = false
     private var showingTrash = false
+    private var noteCycleIDs: [UUID] = []
+    private var escapeEventMonitor: Any?
+    private weak var sidebarToggleButton: NSButton?
+    private weak var formatToggleButton: NSButton?
 
     init(repository: NoteRepository) {
         self.repository = repository
-        panel = NSPanel(
+        panel = DismissiblePanel(
             contentRect: CGRect(x: 0, y: 0, width: 420, height: 640),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
@@ -34,6 +49,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         super.init(window: panel)
         configurePanel()
         configureContents()
+        configureOverlayDismissal()
         let firstNoteID = repository.list().first?.id
         reloadRows(selecting: firstNoteID)
         if let firstNoteID {
@@ -43,8 +59,15 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     required init?(coder: NSCoder) { nil }
 
+    deinit {
+        if let escapeEventMonitor {
+            NSEvent.removeMonitor(escapeEventMonitor)
+        }
+    }
+
     func showOnCurrentScreen() {
         guard let screen = screenUnderMouse() ?? NSScreen.main else { return }
+        closeOverlays(focusEditor: false)
         let remembered = rememberedFrame(for: screen)
         panel.setFrame(WindowPlacement.frame(remembered: remembered, visibleFrame: screen.visibleFrame), display: true)
         panel.makeKeyAndOrderFront(nil)
@@ -61,12 +84,14 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     @objc func hidePanel() {
+        closeOverlays(focusEditor: false)
         saveNow()
         panel.orderOut(nil)
     }
 
     @objc func newNote() {
         saveNow()
+        noteCycleIDs.removeAll()
         showingTrash = false
         scopeControl.selectedSegment = 0
         currentID = UUID()
@@ -158,6 +183,14 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         editor.undoManager?.redo()
     }
 
+    @objc func showPreviousNote() {
+        cycleNote(step: 1)
+    }
+
+    @objc func showNextNote() {
+        cycleNote(step: -1)
+    }
+
     func showStatus(_ message: String, isError: Bool) {
         statusTimer?.invalidate()
         statusLabel.stringValue = "  \(message)  "
@@ -175,6 +208,9 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     func windowDidMove(_ notification: Notification) { rememberCurrentFrame() }
+    func windowDidResignKey(_ notification: Notification) {
+        closeOverlays(focusEditor: false)
+    }
     func windowDidResize(_ notification: Notification) {
         editor.layoutForScrollableViewport()
         rememberCurrentFrame()
@@ -182,6 +218,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     func textDidChange(_ notification: Notification) {
         guard !suppressChanges else { return }
+        noteCycleIDs.removeAll()
         autosaveTimer?.invalidate()
         updateTitle()
         updateWordCount()
@@ -193,6 +230,15 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     func controlTextDidChange(_ obj: Notification) {
         reloadRows(selecting: currentID)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === searchField,
+              commandSelector == #selector(NSResponder.cancelOperation(_:)) else {
+            return false
+        }
+        closeOverlays()
+        return true
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -223,6 +269,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         guard !isRefreshingRows else { return }
         let index = tableView.selectedRow
         guard index >= 0, index < rows.count, rows[index].id != currentID else { return }
+        noteCycleIDs.removeAll()
         saveNow()
         loadNote(id: rows[index].id)
         closeOverlays()
@@ -339,8 +386,24 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         updateWordCount()
     }
 
+    private func configureOverlayDismissal() {
+        panel.handleOverlayMouseDown = { [weak self] point in
+            self?.dismissOverlaysForMouseDown(at: point)
+        }
+        escapeEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  event.window === panel,
+                  event.keyCode == 53,
+                  dismissOpenOverlays(focusEditor: true) else {
+                return event
+            }
+            return nil
+        }
+    }
+
     private func makeHeader() -> NSView {
         let listButton = toolbarButton(symbol: "sidebar.left", label: "노트 목록 열기 또는 닫기", action: #selector(toggleSidebar))
+        sidebarToggleButton = listButton
         listButton.toolTip = "노트 목록 열기/닫기 (⌘⇧L)"
         let newButton = toolbarButton(symbol: "square.and.pencil", label: "새 노트", action: #selector(newNote))
         newButton.toolTip = "새 노트 (⌘N)"
@@ -359,6 +422,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     private func makeFooterFormatButton() -> NSButton {
         let button = NSButton(title: "T", target: self, action: #selector(toggleFormatOverlay))
+        formatToggleButton = button
         button.isBordered = false
         button.font = .systemFont(ofSize: 17, weight: .medium)
         button.contentTintColor = NSColor(calibratedWhite: 0.68, alpha: 1)
@@ -392,6 +456,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         sidebar.layer?.masksToBounds = true
         sidebar.layer?.borderWidth = 1
         sidebar.layer?.borderColor = NSColor(calibratedWhite: 0.32, alpha: 0.55).cgColor
+        sidebar.setAccessibilityLabel("노트와 휴지통 목록")
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.placeholderString = "제목과 본문 검색"
         searchField.setAccessibilityLabel("노트 검색")
@@ -536,10 +601,36 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         return style
     }
 
-    private func closeOverlays() {
+    private func closeOverlays(focusEditor: Bool = true) {
         sidebar.isHidden = true
         formatOverlay.isHidden = true
-        panel.makeFirstResponder(editor)
+        if focusEditor {
+            panel.makeFirstResponder(editor)
+        }
+    }
+
+    @discardableResult
+    func dismissOpenOverlays(focusEditor: Bool = true) -> Bool {
+        guard !sidebar.isHidden || !formatOverlay.isHidden else { return false }
+        closeOverlays(focusEditor: focusEditor)
+        return true
+    }
+
+    private func dismissOverlaysForMouseDown(at windowPoint: NSPoint) {
+        guard !sidebar.isHidden || !formatOverlay.isHidden,
+              let contentView = panel.contentView else { return }
+        let contentPoint = contentView.convert(windowPoint, from: nil)
+        if !sidebar.isHidden, sidebar.frame.contains(contentPoint) { return }
+        if !formatOverlay.isHidden, formatOverlay.frame.contains(contentPoint) { return }
+        if let sidebarToggleButton,
+           sidebarToggleButton.convert(sidebarToggleButton.bounds, to: contentView).contains(contentPoint) {
+            return
+        }
+        if let formatToggleButton,
+           formatToggleButton.convert(formatToggleButton.bounds, to: contentView).contains(contentPoint) {
+            return
+        }
+        closeOverlays(focusEditor: false)
     }
 
     @objc private func applyBoldFromMenu() { toggleBold(); closeOverlays() }
@@ -573,6 +664,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     @objc private func scopeChanged() {
+        noteCycleIDs.removeAll()
         saveNow()
         showingTrash = scopeControl.selectedSegment == 1
         if let actions = sidebar.subviews.first(where: { $0.identifier?.rawValue == "TrashActions" }) {
@@ -629,6 +721,25 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         }
     }
 
+    private func cycleNote(step: Int) {
+        saveNow()
+        showingTrash = false
+        scopeControl.selectedSegment = 0
+        searchField.stringValue = ""
+        let activeIDs = repository.list().map(\.id)
+        if noteCycleIDs.isEmpty || Set(noteCycleIDs) != Set(activeIDs) || !noteCycleIDs.contains(currentID) {
+            noteCycleIDs = activeIDs
+        }
+        guard noteCycleIDs.count > 1,
+              let currentIndex = noteCycleIDs.firstIndex(of: currentID) else {
+            closeOverlays()
+            return
+        }
+        let targetIndex = (currentIndex + step + noteCycleIDs.count) % noteCycleIDs.count
+        loadNote(id: noteCycleIDs[targetIndex])
+        closeOverlays()
+    }
+
     private func reloadRows(selecting id: UUID?) {
         isRefreshingRows = true
         defer { isRefreshingRows = false }
@@ -682,6 +793,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     private func newNoteForCurrentScope() {
+        noteCycleIDs.removeAll()
         currentID = UUID()
         replaceEditorContent(with: NSAttributedString())
         editor.isEditable = !showingTrash

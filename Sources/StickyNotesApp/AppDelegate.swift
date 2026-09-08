@@ -152,6 +152,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main.addItem(noteItem)
         let noteMenu = NSMenu(title: "노트")
         noteMenu.addItem(withTitle: "새 노트", action: #selector(StickyPanelController.newNote), keyEquivalent: "n")
+        noteMenu.addItem(withTitle: "이전 노트", action: #selector(StickyPanelController.showPreviousNote), keyEquivalent: "\t")
+        noteMenu.items.last?.keyEquivalentModifierMask = [.control]
+        noteMenu.addItem(withTitle: "다음 노트", action: #selector(StickyPanelController.showNextNote), keyEquivalent: "\u{19}")
+        noteMenu.items.last?.keyEquivalentModifierMask = [.control, .shift]
+        noteMenu.addItem(.separator())
         noteMenu.addItem(withTitle: "목록 열기/닫기", action: #selector(StickyPanelController.toggleSidebar), keyEquivalent: "l")
         noteMenu.items.last?.keyEquivalentModifierMask = [.command, .shift]
         noteMenu.addItem(withTitle: "굵게", action: #selector(StickyPanelController.toggleBold), keyEquivalent: "b")
