@@ -53,11 +53,15 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     func toggleOnCurrentScreen() {
         if panel.isVisible && panel.isKeyWindow {
-            saveNow()
-            panel.orderOut(nil)
+            hidePanel()
         } else {
             showOnCurrentScreen()
         }
+    }
+
+    @objc func hidePanel() {
+        saveNow()
+        panel.orderOut(nil)
     }
 
     @objc func newNote() {
@@ -184,8 +188,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        saveNow()
-        sender.orderOut(nil)
+        hidePanel()
         return false
     }
 

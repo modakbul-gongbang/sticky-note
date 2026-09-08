@@ -54,6 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuildStatusMenu() {
+        statusItem?.menu = makeStatusMenu()
+    }
+
+    func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(withTitle: "Sticky Notes 열기/숨기기", action: #selector(togglePanel), keyEquivalent: "`")
         menu.items.last?.keyEquivalentModifierMask = [.option]
@@ -68,9 +72,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         login.image = NSImage(systemSymbolName: loginStatus.hasPrefix("등록됨") ? "checkmark.circle.fill" : "exclamationmark.triangle.fill", accessibilityDescription: nil)
         menu.addItem(login)
         menu.addItem(.separator())
-        menu.addItem(withTitle: "종료", action: #selector(quit), keyEquivalent: "q")
+        menu.addItem(withTitle: "완전히 종료", action: #selector(terminateApplication), keyEquivalent: "q")
+        menu.items.last?.keyEquivalentModifierMask = [.command, .option]
         for item in menu.items where item.action != nil { item.target = self }
-        statusItem?.menu = menu
+        return menu
     }
 
     private func configureHotKey() {
@@ -109,11 +114,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configureMainMenu(for controller: StickyPanelController) {
+        NSApp.mainMenu = makeMainMenu(for: controller)
+    }
+
+    func makeMainMenu(for controller: StickyPanelController) -> NSMenu {
         let main = NSMenu()
         let appItem = NSMenuItem()
         main.addItem(appItem)
         let appMenu = NSMenu(title: "Sticky Notes")
-        appMenu.addItem(withTitle: "Sticky Notes 종료", action: #selector(quit), keyEquivalent: "q")
+        let hideItem = NSMenuItem(title: "Sticky Notes 숨기기", action: #selector(hidePanel), keyEquivalent: "q")
+        hideItem.keyEquivalentModifierMask = [.command]
+        hideItem.target = self
+        appMenu.addItem(hideItem)
+        appMenu.addItem(.separator())
+        let terminateItem = NSMenuItem(title: "완전히 종료", action: #selector(terminateApplication), keyEquivalent: "q")
+        terminateItem.keyEquivalentModifierMask = [.command, .option]
+        terminateItem.target = self
+        appMenu.addItem(terminateItem)
         appItem.submenu = appMenu
 
         let editItem = NSMenuItem()
@@ -144,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         noteMenu.items.last?.keyEquivalentModifierMask = [.command, .shift]
         for item in noteMenu.items { item.target = controller }
         noteItem.submenu = noteMenu
-        NSApp.mainMenu = main
+        return main
     }
 
     @objc private func togglePanel() {
@@ -166,7 +183,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func quit() {
+    @objc private func hidePanel() {
+        panelController?.hidePanel()
+    }
+
+    @objc private func terminateApplication() {
         NSApp.terminate(nil)
     }
 
