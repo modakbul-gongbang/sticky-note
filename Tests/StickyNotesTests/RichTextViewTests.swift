@@ -298,6 +298,73 @@ import Testing
         #expect(editor.string == "1.\t부모\n자식")
     }
 
+    @Test func everyListKindStopsAtOneChildLevelAndKeepsEditingUndoable() {
+        let cases: [(kind: ListItemKind, label: String)] = [
+            (.uncheckedChecklist, "checklist"),
+            (.bullet, "bullet"),
+            (.ordered(1), "ordered"),
+        ]
+
+        for testCase in cases {
+            let editor = configuredEditor()
+            let undoManager = editor.undoManager!
+            undoManager.groupsByEvent = false
+            func performUserAction(_ action: () -> Void) {
+                undoManager.beginUndoGrouping()
+                action()
+                undoManager.endUndoGrouping()
+            }
+            func currentIndent() -> CGFloat? {
+                guard editor.requiredTextStorage.length > 0 else { return nil }
+                let style = editor.requiredTextStorage.attribute(
+                    .paragraphStyle,
+                    at: 0,
+                    effectiveRange: nil
+                ) as? NSParagraphStyle
+                return style?.firstLineHeadIndent
+            }
+
+            performUserAction { editor.insertListItem(testCase.kind) }
+            performUserAction {
+                editor.insertText("항목", replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+            let rootText = "\(testCase.kind.prefix)항목"
+            #expect(editor.string == rootText, "\(testCase.label) root")
+
+            performUserAction { editor.insertTab(nil) }
+            #expect(currentIndent() == 24, "\(testCase.label) first Tab")
+            editor.insertTab(nil)
+            #expect(currentIndent() == 24, "\(testCase.label) repeated Tab")
+            undoManager.undo()
+            #expect(currentIndent() == 0, "\(testCase.label) repeated Tab adds no undo step")
+            undoManager.redo()
+            #expect(currentIndent() == 24, "\(testCase.label) indent redo")
+
+            performUserAction { editor.insertBacktab(nil) }
+            #expect(currentIndent() == 0, "\(testCase.label) Shift+Tab")
+            editor.insertBacktab(nil)
+            #expect(currentIndent() == 0, "\(testCase.label) repeated Shift+Tab")
+            undoManager.undo()
+            #expect(currentIndent() == 24, "\(testCase.label) repeated Shift+Tab adds no undo step")
+            undoManager.redo()
+            #expect(currentIndent() == 0, "\(testCase.label) outdent redo")
+
+            performUserAction { editor.insertNewline(nil) }
+            let continuedText = "\(rootText)\n\(testCase.kind.continuation.prefix)"
+            #expect(editor.string == continuedText, "\(testCase.label) continuation")
+            performUserAction { editor.deleteBackward(nil) }
+            #expect(editor.string == "\(rootText)\n", "\(testCase.label) Backspace removes marker")
+            undoManager.undo()
+            #expect(editor.string == continuedText, "\(testCase.label) Backspace undo")
+            undoManager.undo()
+            #expect(editor.string == rootText, "\(testCase.label) Enter undo")
+            undoManager.redo()
+            #expect(editor.string == continuedText, "\(testCase.label) Enter redo")
+            undoManager.redo()
+            #expect(editor.string == "\(rootText)\n", "\(testCase.label) Backspace redo")
+        }
+    }
+
     @Test func loadedContentOccupiesTheVisibleEditorViewport() {
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 600))
         scrollView.hasVerticalScroller = true

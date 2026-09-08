@@ -53,7 +53,7 @@ public struct ListItemConversion: Equatable, Sendable {
 }
 
 public enum ListItemSyntax {
-    public static let maximumIndentLevel = 8
+    public static let maximumIndentLevel = 1
 
     public static func conversion(linePrefix: String, insertedText: String) -> ListItemConversion? {
         guard insertedText == " " else { return nil }

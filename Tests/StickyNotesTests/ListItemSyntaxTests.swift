@@ -29,8 +29,9 @@ import Testing
         #expect(ListItemKind.bullet.continuation == .bullet)
         #expect(ListItemSyntax.adjustedIndentLevel(0, by: -1) == 0)
         #expect(ListItemSyntax.adjustedIndentLevel(0, by: 1) == 1)
-        #expect(ListItemSyntax.adjustedIndentLevel(3, by: -1) == 2)
-        #expect(ListItemSyntax.adjustedIndentLevel(8, by: 1) == 8)
+        #expect(ListItemSyntax.adjustedIndentLevel(1, by: 1) == 1)
+        #expect(ListItemSyntax.adjustedIndentLevel(1, by: -1) == 0)
+        #expect(ListItemSyntax.adjustedIndentLevel(3, by: -1) == 1)
     }
 
     @Test func backspaceAtContentStartRemovesOnlyTheWholeListPrefix() {
