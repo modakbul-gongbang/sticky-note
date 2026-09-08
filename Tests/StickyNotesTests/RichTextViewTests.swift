@@ -173,6 +173,41 @@ import Testing
         #expect(foundLink)
     }
 
+    @Test func deletingAndInsertingLinesRenumbersTheOrderedListBelow() {
+        let editor = configuredEditor()
+        let undoManager = editor.undoManager!
+        undoManager.groupsByEvent = false
+        func performUserAction(_ action: () -> Void) {
+            undoManager.beginUndoGrouping()
+            action()
+            undoManager.endUndoGrouping()
+        }
+
+        performUserAction { editor.insertListItem(.ordered(1)) }
+        performUserAction { editor.insertText("하나", replacementRange: NSRange(location: NSNotFound, length: 0)) }
+        performUserAction { editor.insertNewline(nil) }
+        performUserAction { editor.insertText("둘", replacementRange: NSRange(location: NSNotFound, length: 0)) }
+        performUserAction { editor.insertNewline(nil) }
+        performUserAction { editor.insertText("셋", replacementRange: NSRange(location: NSNotFound, length: 0)) }
+        #expect(editor.string == "1.\t하나\n2.\t둘\n3.\t셋")
+
+        // Selecting a whole row and deleting it never goes through a list command.
+        editor.setSelectedRange((editor.string as NSString).range(of: "2.\t둘\n"))
+        performUserAction { editor.deleteBackward(nil) }
+        #expect(editor.string == "1.\t하나\n2.\t셋")
+
+        undoManager.undo()
+        #expect(editor.string == "1.\t하나\n2.\t둘\n3.\t셋")
+
+        // A row dropped into the middle takes the number its position calls for.
+        let secondRow = (editor.string as NSString).range(of: "2.\t둘")
+        editor.setSelectedRange(NSRange(location: secondRow.location, length: 0))
+        performUserAction {
+            editor.insertText("9.\t끼어듦\n", replacementRange: NSRange(location: secondRow.location, length: 0))
+        }
+        #expect(editor.string == "1.\t하나\n2.\t끼어듦\n3.\t둘\n4.\t셋")
+    }
+
     private func sampleImage() -> NSImage {
         let image = NSImage(size: NSSize(width: 12, height: 8))
         image.lockFocus()

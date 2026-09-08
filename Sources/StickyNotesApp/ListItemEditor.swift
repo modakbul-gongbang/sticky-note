@@ -14,6 +14,7 @@ final class ListItemEditor: NSObject {
     private let controlStrokeWidth: CGFloat = 1.5
     private let hitTargetInset: CGFloat = 5
     private var presentationIsDirty = true
+    private var isRenumbering = false
 
     init(textView: RichTextView) {
         self.textView = textView
@@ -194,6 +195,9 @@ final class ListItemEditor: NSObject {
     }
 
     func textDidChange() {
+        // Any edit can break the ordered sequence - deleting a whole line, cutting, pasting -
+        // not just the list commands below, so numbering is repaired for every change.
+        renumberOrderedLists()
         presentationIsDirty = true
         refreshTemporaryAttributes()
         invalidatePresentation()
@@ -535,11 +539,14 @@ final class ListItemEditor: NSObject {
     }
 
     private func renumberOrderedLists() {
-        guard let textView, !textView.string.isEmpty else { return }
+        guard let textView, !textView.string.isEmpty, !isRenumbering else { return }
+        isRenumbering = true
+        defer { isRenumbering = false }
         let storage = textView.requiredTextStorage
         var selection = textView.selectedRange()
         var counters: [Int: Int] = [:]
         var location = 0
+        var renumbered = false
 
         while location < storage.length {
             let source = storage.string as NSString
@@ -569,13 +576,18 @@ final class ListItemEditor: NSObject {
                         selection.location = max(markerRange.location + replacement.utf16.count, selection.location + delta)
                     }
                     paragraph = (storage.string as NSString).paragraphRange(for: NSRange(location: paragraph.location, length: 0))
+                    applyParagraphStyle(level: level, to: paragraph)
+                    renumbered = true
                 }
-                applyParagraphStyle(level: level, to: paragraph)
             case .uncheckedChecklist, .checkedChecklist, .bullet:
                 for key in counters.keys.filter({ $0 >= level }) { counters.removeValue(forKey: key) }
             }
             location = NSMaxRange(paragraph)
         }
+        // Untouched markers leave the selection - and the layout - exactly as the edit left them.
+        guard renumbered else { return }
+        selection.location = min(selection.location, storage.length)
+        selection.length = min(selection.length, storage.length - selection.location)
         textView.setSelectedRange(selection)
     }
 
