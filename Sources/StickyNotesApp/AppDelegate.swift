@@ -155,7 +155,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         noteMenu.addItem(withTitle: "목록 열기/닫기", action: #selector(StickyPanelController.toggleSidebar), keyEquivalent: "l")
         noteMenu.items.last?.keyEquivalentModifierMask = [.command, .shift]
         noteMenu.addItem(withTitle: "굵게", action: #selector(StickyPanelController.toggleBold), keyEquivalent: "b")
-        noteMenu.addItem(withTitle: "링크", action: #selector(StickyPanelController.addLink), keyEquivalent: "k")
         noteMenu.addItem(withTitle: "현재 줄 체크리스트 전환", action: #selector(StickyPanelController.toggleChecklistLine), keyEquivalent: "l")
         noteMenu.addItem(withTitle: "서식 메뉴 열기/닫기", action: #selector(StickyPanelController.toggleFormatOverlay), keyEquivalent: "f")
         noteMenu.items.last?.keyEquivalentModifierMask = [.command, .shift]

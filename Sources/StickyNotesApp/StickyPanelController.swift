@@ -11,6 +11,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private let sidebar = NSVisualEffectView()
     private let formatOverlay = NSVisualEffectView()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let wordCountLabel = NSTextField(labelWithString: "0단어")
     private let restoreButton = NSButton(title: "복원", target: nil, action: nil)
     private let emptyTrashButton = NSButton(title: "휴지통 비우기", target: nil, action: nil)
     private let accentColor = NSColor(calibratedRed: 0.88, green: 0.27, blue: 0.23, alpha: 1)
@@ -157,25 +158,6 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         editor.undoManager?.redo()
     }
 
-    @objc func addLink() {
-        let selection = editor.selectedRange()
-        guard selection.length > 0 else {
-            showStatus("링크로 만들 텍스트를 먼저 선택하세요.", isError: true)
-            return
-        }
-        let field = NSTextField(string: "https://")
-        field.setAccessibilityLabel("링크 주소")
-        let alert = NSAlert()
-        alert.messageText = "링크 주소"
-        alert.informativeText = "선택한 텍스트에 연결할 주소를 입력하세요."
-        alert.accessoryView = field
-        alert.addButton(withTitle: "링크 추가")
-        alert.addButton(withTitle: "취소")
-        guard alert.runModal() == .alertFirstButtonReturn, let url = URL(string: field.stringValue) else { return }
-        editor.requiredTextStorage.addAttribute(.link, value: url, range: selection)
-        editor.didChangeText()
-    }
-
     func showStatus(_ message: String, isError: Bool) {
         statusTimer?.invalidate()
         statusLabel.stringValue = "  \(message)  "
@@ -202,6 +184,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         guard !suppressChanges else { return }
         autosaveTimer?.invalidate()
         updateTitle()
+        updateWordCount()
         showStatus("저장 중…", isError: false)
         autosaveTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
             self?.saveNow()
@@ -274,6 +257,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         panel.contentView = root
 
         let header = makeHeader()
+        let formatButton = makeFooterFormatButton()
         let editorScroll = NSScrollView()
         editorScroll.translatesAutoresizingMaskIntoConstraints = false
         editorScroll.drawsBackground = false
@@ -311,11 +295,14 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         configureSidebar()
         configureFormatOverlay()
         configureStatusLabel()
+        configureWordCountLabel()
         root.addSubview(editorScroll)
         root.addSubview(header)
         root.addSubview(sidebar)
         root.addSubview(formatOverlay)
         root.addSubview(statusLabel)
+        root.addSubview(wordCountLabel)
+        root.addSubview(formatButton)
 
         sidebar.isHidden = true
         formatOverlay.isHidden = true
@@ -327,24 +314,29 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             editorScroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
             editorScroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             editorScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            editorScroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            editorScroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -48),
             sidebar.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
             sidebar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             sidebar.widthAnchor.constraint(equalToConstant: 306),
             sidebar.heightAnchor.constraint(equalToConstant: 360),
             sidebar.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -12),
-            sidebar.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -12),
-            formatOverlay.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
-            formatOverlay.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            sidebar.bottomAnchor.constraint(lessThanOrEqualTo: editorScroll.bottomAnchor, constant: -8),
+            formatOverlay.topAnchor.constraint(greaterThanOrEqualTo: header.bottomAnchor, constant: 8),
+            formatOverlay.trailingAnchor.constraint(equalTo: formatButton.trailingAnchor),
             formatOverlay.widthAnchor.constraint(equalToConstant: 216),
-            formatOverlay.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -12),
+            formatOverlay.bottomAnchor.constraint(equalTo: formatButton.topAnchor, constant: -8),
+            formatButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            formatButton.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
+            wordCountLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
+            wordCountLabel.centerYAnchor.constraint(equalTo: formatButton.centerYAnchor),
             statusLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            statusLabel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14),
+            statusLabel.centerYAnchor.constraint(equalTo: formatButton.centerYAnchor),
             statusLabel.heightAnchor.constraint(equalToConstant: 26),
-            statusLabel.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -32),
+            statusLabel.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -180),
         ])
         root.layoutSubtreeIfNeeded()
         editor.layoutForScrollableViewport()
+        updateWordCount()
     }
 
     private func makeHeader() -> NSView {
@@ -352,25 +344,30 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         listButton.toolTip = "노트 목록 열기/닫기 (⌘⇧L)"
         let newButton = toolbarButton(symbol: "square.and.pencil", label: "새 노트", action: #selector(newNote))
         newButton.toolTip = "새 노트 (⌘N)"
-        let formatButton = toolbarButton(symbol: "ellipsis", label: "서식 메뉴 열기 또는 닫기", action: #selector(toggleFormatOverlay))
-        formatButton.toolTip = "서식과 노트 동작"
-
-        let trailing = NSStackView(views: [formatButton, newButton])
-        trailing.orientation = .horizontal
-        trailing.spacing = 2
-        trailing.translatesAutoresizingMaskIntoConstraints = false
-
         let header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(listButton)
-        header.addSubview(trailing)
+        header.addSubview(newButton)
         NSLayoutConstraint.activate([
             listButton.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             listButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            trailing.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            trailing.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            newButton.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            newButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
         ])
         return header
+    }
+
+    private func makeFooterFormatButton() -> NSButton {
+        let button = NSButton(title: "T", target: self, action: #selector(toggleFormatOverlay))
+        button.isBordered = false
+        button.font = .systemFont(ofSize: 17, weight: .medium)
+        button.contentTintColor = NSColor(calibratedWhite: 0.68, alpha: 1)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setAccessibilityLabel("서식 메뉴 열기 또는 닫기")
+        button.toolTip = "서식 메뉴 열기/닫기 (⌘⇧F)"
+        button.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        return button
     }
 
     private func toolbarButton(symbol: String, label: String, action: Selector) -> NSButton {
@@ -474,8 +471,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         let buttons = [
             formatActionButton(title: "굵게", symbol: "bold", action: #selector(applyBoldFromMenu)),
             formatActionButton(title: "글머리 기호", symbol: "list.bullet", action: #selector(applyListFromMenu)),
+            formatActionButton(title: "번호 목록", symbol: "list.number", action: #selector(applyOrderedListFromMenu)),
             formatActionButton(title: "체크리스트", symbol: "checklist", action: #selector(applyChecklistFromMenu), tint: accentColor),
-            formatActionButton(title: "링크", symbol: "link", action: #selector(applyLinkFromMenu)),
             formatActionButton(title: "이미지 작게", symbol: "photo.badge.minus", action: #selector(resizeImageSmall)),
             formatActionButton(title: "이미지 보통", symbol: "photo", action: #selector(resizeImageMedium)),
             formatActionButton(title: "이미지 크게", symbol: "photo.badge.plus", action: #selector(resizeImageLarge)),
@@ -525,6 +522,13 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         statusLabel.setAccessibilityLabel("저장 상태")
     }
 
+    private func configureWordCountLabel() {
+        wordCountLabel.translatesAutoresizingMaskIntoConstraints = false
+        wordCountLabel.font = .systemFont(ofSize: 11, weight: .regular)
+        wordCountLabel.textColor = NSColor(calibratedWhite: 0.48, alpha: 1)
+        wordCountLabel.setAccessibilityLabel("단어 수")
+    }
+
     private func editorParagraphStyle() -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 4
@@ -540,8 +544,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     @objc private func applyBoldFromMenu() { toggleBold(); closeOverlays() }
     @objc private func applyListFromMenu() { editor.insertListItem(.bullet); closeOverlays() }
+    @objc private func applyOrderedListFromMenu() { editor.insertListItem(.ordered(1)); closeOverlays() }
     @objc private func applyChecklistFromMenu() { editor.insertListItem(.uncheckedChecklist); closeOverlays() }
-    @objc private func applyLinkFromMenu() { closeOverlays(); addLink() }
     @objc private func resizeImageSmall() { resizeImage(0.45); closeOverlays() }
     @objc private func resizeImageMedium() { resizeImage(0.68); closeOverlays() }
     @objc private func resizeImageLarge() { resizeImage(0.92); closeOverlays() }
@@ -555,6 +559,11 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         panel.title = NoteContent.isEmpty(editor.attributedString())
             ? "새 노트"
             : NoteContent.title(from: editor.attributedString())
+    }
+
+    private func updateWordCount() {
+        let count = editor.string.split(whereSeparator: { $0.isWhitespace }).count
+        wordCountLabel.stringValue = "\(count)단어"
     }
 
     private func resizeImage(_ fraction: CGFloat) {
@@ -637,13 +646,13 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         do {
             let note = try repository.load(id: id)
             currentID = id
-            let migratedChecklist = replaceEditorContent(with: note.content)
+            let normalizedAppearance = replaceEditorContent(with: note.content)
             editor.isEditable = !note.metadata.isTrashed
             reloadRows(selecting: id)
             panel.title = note.metadata.title
-            if migratedChecklist, editor.isEditable {
+            if normalizedAppearance, editor.isEditable {
                 saveNow()
-                showStatus("이전 체크리스트 형식을 정리해 저장했습니다.", isError: false)
+                showStatus("노트 서식을 정리해 저장했습니다.", isError: false)
             } else {
                 showStatus(note.metadata.isTrashed ? "휴지통의 노트 - 복원하기 전에는 읽기 전용입니다." : "저장됨", isError: false)
             }
@@ -654,13 +663,14 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private func replaceEditorContent(with content: NSAttributedString) -> Bool {
         suppressChanges = true
         editor.requiredTextStorage.setAttributedString(content)
-        let migratedChecklist = editor.reloadListPresentation()
+        let normalizedAppearance = editor.reloadListPresentation()
         editor.layoutForScrollableViewport(scrollToDocumentStart: true)
         resetTypingAttributes()
         editor.resetUndoHistory()
         suppressChanges = false
         updateTitle()
-        return migratedChecklist
+        updateWordCount()
+        return normalizedAppearance
     }
 
     private func resetTypingAttributes() {

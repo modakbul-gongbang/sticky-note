@@ -3,10 +3,13 @@ import StickyNotesCore
 
 final class RichTextView: NSTextView {
     var onAttachmentDoubleClick: ((NSImage) -> Void)?
+    var onLinkClick: ((URL) -> Void)?
     private let editorUndoManager = UndoManager()
     private let ownedTextStorage: NSTextStorage?
     private let ownedLayoutManager: NSLayoutManager?
     private let ownedTextContainer: NSTextContainer?
+    private let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    private var automaticallyDetectedLinks: [(range: NSRange, url: URL)] = []
     private lazy var listItemEditor = ListItemEditor(textView: self)
 
     override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
@@ -111,7 +114,11 @@ final class RichTextView: NSTextView {
 
     @discardableResult
     func reloadListPresentation() -> Bool {
-        listItemEditor.reloadPresentation()
+        let before = NSAttributedString(attributedString: attributedString())
+        _ = listItemEditor.reloadPresentation()
+        automaticallyDetectedLinks.removeAll()
+        detectURLs()
+        return !before.isEqual(to: attributedString())
     }
 
     override func paste(_ sender: Any?) {
@@ -120,6 +127,25 @@ final class RichTextView: NSTextView {
             return
         }
         super.paste(sender)
+        detectURLs()
+    }
+
+    override func readSelection(from pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard let documentType = documentType(for: type),
+              let data = pasteboard.data(forType: type),
+              let source = try? NSAttributedString(
+                  data: data,
+                  options: [.documentType: documentType],
+                  documentAttributes: nil
+              ) else {
+            let inserted = super.readSelection(from: pasteboard, type: type)
+            if inserted { detectURLs() }
+            return inserted
+        }
+        let normalized = listItemEditor.normalizedContent(source)
+        super.insertText(normalized, replacementRange: selectedRange())
+        detectURLs()
+        return true
     }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
@@ -127,6 +153,7 @@ final class RichTextView: NSTextView {
             return
         }
         super.insertText(insertString, replacementRange: replacementRange)
+        detectURLs()
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -159,6 +186,7 @@ final class RichTextView: NSTextView {
 
     override func didChangeText() {
         listItemEditor.textDidChange()
+        detectURLs()
         super.didChangeText()
     }
 
@@ -175,6 +203,15 @@ final class RichTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         if listItemEditor.handleMouseDown(event) {
+            return
+        }
+        if event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+           let url = link(at: event) {
+            if let onLinkClick {
+                onLinkClick(url)
+            } else {
+                NSWorkspace.shared.open(url)
+            }
             return
         }
         if let (index, attachment) = attachment(at: event) {
@@ -249,6 +286,78 @@ final class RichTextView: NSTextView {
         return result
     }
 
+    private func link(at event: NSEvent) -> URL? {
+        let point = convert(event.locationInWindow, from: nil)
+        let containerPoint = NSPoint(
+            x: point.x - textContainerOrigin.x,
+            y: point.y - textContainerOrigin.y
+        )
+        let layoutManager = requiredLayoutManager
+        let textContainer = requiredTextContainer
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+        let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        guard characterIndex < requiredTextStorage.length else { return nil }
+        var effectiveRange = NSRange()
+        let value = requiredTextStorage.attribute(.link, at: characterIndex, effectiveRange: &effectiveRange)
+        guard value != nil else { return nil }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: effectiveRange, actualCharacterRange: nil)
+        let hitRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        guard hitRect.contains(containerPoint) else { return nil }
+        if let url = value as? URL { return url }
+        if let string = value as? String { return URL(string: string) }
+        return nil
+    }
+
+    private func detectURLs() {
+        guard let linkDetector else { return }
+        guard requiredTextStorage.length > 0 else {
+            automaticallyDetectedLinks.removeAll()
+            return
+        }
+        let range = NSRange(location: 0, length: requiredTextStorage.length)
+        let matches = linkDetector.matches(in: string, options: [], range: range).filter {
+            guard let scheme = $0.url?.scheme?.lowercased() else { return false }
+            return scheme == "http" || scheme == "https"
+        }
+        let detectedRanges = Dictionary(uniqueKeysWithValues: matches.compactMap { match in
+            match.url.map { (NSStringFromRange(match.range), $0) }
+        })
+        var autoLinkRanges: [NSRange] = []
+        requiredTextStorage.enumerateAttribute(.link, in: range) { value, linkRange, _ in
+            let url: URL?
+            if let value = value as? URL {
+                url = value
+            } else if let value = value as? String {
+                url = URL(string: value)
+            } else {
+                url = nil
+            }
+            guard let url else { return }
+            let visibleText = (string as NSString).substring(with: linkRange)
+            let detectorURL = detectedRanges[NSStringFromRange(linkRange)]
+            let overlapsKnownAutomaticLink = automaticallyDetectedLinks.contains {
+                $0.url == url && NSIntersectionRange($0.range, linkRange).length > 0
+            }
+            if overlapsKnownAutomaticLink
+                || visibleText == url.absoluteString
+                || detectorURL == url {
+                autoLinkRanges.append(linkRange)
+            }
+        }
+        for linkRange in autoLinkRanges {
+            requiredTextStorage.removeAttribute(.link, range: linkRange)
+        }
+        automaticallyDetectedLinks.removeAll(keepingCapacity: true)
+        for match in matches {
+            guard let url = match.url else { continue }
+            requiredTextStorage.addAttribute(.link, value: url, range: match.range)
+            automaticallyDetectedLinks.append((match.range, url))
+        }
+        typingAttributes.removeValue(forKey: .link)
+    }
+
     private func fittedBounds(for image: NSImage, fraction: CGFloat) -> CGRect {
         let source = image.size
         let maximumWidth = max(120, requiredTextContainer.containerSize.width * fraction)
@@ -262,14 +371,23 @@ final class RichTextView: NSTextView {
         precondition(textContainer != nil, "RichTextView requires NSTextContainer")
     }
 
+    private func documentType(for pasteboardType: NSPasteboard.PasteboardType) -> NSAttributedString.DocumentType? {
+        switch pasteboardType {
+        case .rtf: .rtf
+        case .rtfd: .rtfd
+        case .html: .html
+        default: nil
+        }
+    }
+
     private func disableSystemTextTransformations() {
         isAutomaticTextCompletionEnabled = false
         isAutomaticQuoteSubstitutionEnabled = false
         isAutomaticDashSubstitutionEnabled = false
         isAutomaticTextReplacementEnabled = false
         isAutomaticSpellingCorrectionEnabled = false
-        isAutomaticLinkDetectionEnabled = false
-        isAutomaticDataDetectionEnabled = false
-        enabledTextCheckingTypes = 0
+        isAutomaticLinkDetectionEnabled = true
+        isAutomaticDataDetectionEnabled = true
+        enabledTextCheckingTypes = NSTextCheckingResult.CheckingType.link.rawValue
     }
 }
