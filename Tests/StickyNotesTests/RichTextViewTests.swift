@@ -437,7 +437,7 @@ import Testing
         #expect(editor.string == "1.\t부모\n자식")
     }
 
-    @Test func everyListKindStopsAtOneChildLevelAndKeepsEditingUndoable() {
+    @Test func everyListKindContinuesAndDeletesUndoably() {
         let cases: [(kind: ListItemKind, label: String)] = [
             (.uncheckedChecklist, "checklist"),
             (.bullet, "bullet"),
@@ -453,40 +453,12 @@ import Testing
                 action()
                 undoManager.endUndoGrouping()
             }
-            func currentIndent() -> CGFloat? {
-                guard editor.requiredTextStorage.length > 0 else { return nil }
-                let style = editor.requiredTextStorage.attribute(
-                    .paragraphStyle,
-                    at: 0,
-                    effectiveRange: nil
-                ) as? NSParagraphStyle
-                return style?.firstLineHeadIndent
-            }
-
             performUserAction { editor.insertListItem(testCase.kind) }
             performUserAction {
                 editor.insertText("항목", replacementRange: NSRange(location: NSNotFound, length: 0))
             }
             let rootText = "\(testCase.kind.prefix)항목"
             #expect(editor.string == rootText, "\(testCase.label) root")
-
-            performUserAction { editor.insertTab(nil) }
-            #expect(currentIndent() == 24, "\(testCase.label) first Tab")
-            editor.insertTab(nil)
-            #expect(currentIndent() == 24, "\(testCase.label) repeated Tab")
-            undoManager.undo()
-            #expect(currentIndent() == 0, "\(testCase.label) repeated Tab adds no undo step")
-            undoManager.redo()
-            #expect(currentIndent() == 24, "\(testCase.label) indent redo")
-
-            performUserAction { editor.insertBacktab(nil) }
-            #expect(currentIndent() == 0, "\(testCase.label) Shift+Tab")
-            editor.insertBacktab(nil)
-            #expect(currentIndent() == 0, "\(testCase.label) repeated Shift+Tab")
-            undoManager.undo()
-            #expect(currentIndent() == 24, "\(testCase.label) repeated Shift+Tab adds no undo step")
-            undoManager.redo()
-            #expect(currentIndent() == 0, "\(testCase.label) outdent redo")
 
             performUserAction { editor.insertNewline(nil) }
             let continuedText = "\(rootText)\n\(testCase.kind.continuation.prefix)"
@@ -501,6 +473,129 @@ import Testing
             #expect(editor.string == continuedText, "\(testCase.label) Enter redo")
             undoManager.redo()
             #expect(editor.string == "\(rootText)\n", "\(testCase.label) Backspace redo")
+        }
+    }
+
+    @Test func indentationStopsOneLevelBelowTheRowAboveAndIsUndoable() {
+        let editor = configuredEditor()
+        let undoManager = editor.undoManager!
+        undoManager.groupsByEvent = false
+        func performUserAction(_ action: () -> Void) {
+            undoManager.beginUndoGrouping()
+            action()
+            undoManager.endUndoGrouping()
+        }
+        func indent(ofRowContaining text: String) -> CGFloat? {
+            let location = (editor.string as NSString).range(of: text).location
+            guard location != NSNotFound else { return nil }
+            let style = editor.requiredTextStorage.attribute(
+                .paragraphStyle,
+                at: location,
+                effectiveRange: nil
+            ) as? NSParagraphStyle
+            return style?.firstLineHeadIndent
+        }
+        func type(_ text: String) {
+            performUserAction {
+                editor.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+        }
+
+        performUserAction { editor.insertListItem(.bullet) }
+        type("첫째")
+        // The first row of a list has no row above it to nest under.
+        performUserAction { editor.insertTab(nil) }
+        #expect(indent(ofRowContaining: "첫째") == 0)
+
+        performUserAction { editor.insertNewline(nil) }
+        type("둘째")
+        performUserAction { editor.insertTab(nil) }
+        #expect(indent(ofRowContaining: "둘째") == 24)
+        editor.insertTab(nil)
+        #expect(indent(ofRowContaining: "둘째") == 24, "the row above is still at level 0")
+
+        performUserAction { editor.insertNewline(nil) }
+        type("셋째")
+        #expect(indent(ofRowContaining: "셋째") == 24, "a continuation inherits its row's level")
+        performUserAction { editor.insertTab(nil) }
+        #expect(indent(ofRowContaining: "셋째") == 48, "no ceiling beyond the row above")
+        editor.insertTab(nil)
+        #expect(indent(ofRowContaining: "셋째") == 48)
+
+        performUserAction { editor.insertBacktab(nil) }
+        #expect(indent(ofRowContaining: "셋째") == 24)
+        undoManager.undo()
+        #expect(indent(ofRowContaining: "셋째") == 48)
+        undoManager.redo()
+        #expect(indent(ofRowContaining: "셋째") == 24)
+        performUserAction { editor.insertBacktab(nil) }
+        #expect(indent(ofRowContaining: "셋째") == 0)
+        editor.insertBacktab(nil)
+        #expect(indent(ofRowContaining: "셋째") == 0)
+    }
+
+    @Test func storedDeepHierarchySurvivesReload() throws {
+        let editor = configuredEditor()
+        let content = NSMutableAttributedString(string: "• 최상위\n• 중간\n• 말단\n")
+        for (text, indent) in [("• 중간", CGFloat(24)), ("• 말단", CGFloat(48))] {
+            let style = NSMutableParagraphStyle()
+            style.firstLineHeadIndent = indent
+            style.headIndent = indent + 25
+            let location = (content.string as NSString).range(of: text).location
+            content.addAttribute(
+                .paragraphStyle,
+                value: style,
+                range: (content.string as NSString).paragraphRange(for: NSRange(location: location, length: 0))
+            )
+        }
+        editor.requiredTextStorage.setAttributedString(content)
+
+        _ = editor.reloadListPresentation()
+
+        func indent(ofRowContaining text: String) throws -> CGFloat {
+            let location = (editor.string as NSString).range(of: text).location
+            let style = try #require(editor.requiredTextStorage.attribute(
+                .paragraphStyle,
+                at: location,
+                effectiveRange: nil
+            ) as? NSParagraphStyle)
+            return style.firstLineHeadIndent
+        }
+        #expect(try indent(ofRowContaining: "최상위") == 0)
+        #expect(try indent(ofRowContaining: "중간") == 24)
+        #expect(try indent(ofRowContaining: "말단") == 48)
+    }
+
+    @Test func orderedAndBulletMarkersAreDrawnInALighterAccentThanTheBodyText() throws {
+        let editor = configuredEditor()
+        let accent = NSColor(calibratedRed: 0.88, green: 0.27, blue: 0.23, alpha: 1)
+        editor.checklistAccentColor = accent
+        editor.requiredTextStorage.setAttributedString(NSAttributedString(string: "1.\t번호\n• 글머리\n"))
+        _ = editor.reloadListPresentation()
+        editor.requiredLayoutManager.ensureLayout(for: editor.requiredTextContainer)
+
+        func markerColor(ofRowContaining text: String) throws -> NSColor {
+            let location = (editor.string as NSString).range(of: text).location
+            let paragraph = (editor.string as NSString).paragraphRange(for: NSRange(location: location, length: 0))
+            let value = editor.requiredLayoutManager.temporaryAttribute(
+                .foregroundColor,
+                atCharacterIndex: paragraph.location,
+                effectiveRange: nil
+            )
+            return try #require(value as? NSColor).usingColorSpace(.deviceRGB) ?? accent
+        }
+        func brightness(_ color: NSColor) -> CGFloat {
+            0.299 * color.redComponent + 0.587 * color.greenComponent + 0.114 * color.blueComponent
+        }
+
+        let bodyColor = try #require(editor.textColor?.usingColorSpace(.deviceRGB))
+        let accentBrightness = brightness(try #require(accent.usingColorSpace(.deviceRGB)))
+        for row in ["번호", "글머리"] {
+            let color = try markerColor(ofRowContaining: row)
+            #expect(color.redComponent > color.greenComponent, "\(row) reads as red")
+            #expect(color.redComponent > color.blueComponent, "\(row) reads as red")
+            #expect(brightness(color) > accentBrightness, "\(row) is lighter than the control accent")
+            #expect(color != bodyColor, "\(row) is not body colour")
         }
     }
 
@@ -579,16 +674,9 @@ import Testing
         performUserAction { editor.insertText(" ", replacementRange: NSRange(location: NSNotFound, length: 0)) }
         #expect(editor.string == "☐\t")
 
+        // Nothing precedes this row, so Tab has no parent to nest under and leaves it alone.
         performUserAction { editor.insertTab(nil) }
         var style = editor.requiredTextStorage.attribute(
-            .paragraphStyle,
-            at: 0,
-            effectiveRange: nil
-        ) as? NSParagraphStyle
-        #expect(style?.firstLineHeadIndent == 24)
-
-        performUserAction { editor.insertBacktab(nil) }
-        style = editor.requiredTextStorage.attribute(
             .paragraphStyle,
             at: 0,
             effectiveRange: nil

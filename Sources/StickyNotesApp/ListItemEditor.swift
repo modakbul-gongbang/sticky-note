@@ -3,7 +3,16 @@ import StickyNotesCore
 
 final class ListItemEditor: NSObject {
     var accentColor = NSColor(calibratedRed: 0.88, green: 0.27, blue: 0.23, alpha: 1) {
-        didSet { textView?.needsDisplay = true }
+        didSet {
+            presentationIsDirty = true
+            textView?.needsDisplay = true
+        }
+    }
+
+    /// The checklist control is a filled shape, but a number or bullet is thin text, so the marker
+    /// takes a lightened accent to read as strongly as the control does beside it.
+    var markerColor: NSColor {
+        accentColor.blended(withFraction: 0.25, of: .white) ?? accentColor
     }
 
     private weak var textView: RichTextView?
@@ -146,7 +155,11 @@ final class ListItemEditor: NSObject {
         let paragraph = paragraphRange(at: textView.selectedRange().location)
         guard match(in: paragraph) != nil else { return false }
         let current = hierarchyLevel(at: paragraph.location)
-        let adjusted = ListItemSyntax.adjustedIndentLevel(current, by: delta)
+        let adjusted = ListItemSyntax.indentLevel(
+            current,
+            adjustedBy: delta,
+            levelAbove: levelOfListRowAbove(paragraph)
+        )
         guard adjusted != current else { return true }
 
         transaction(named: delta > 0 ? "목록 들여쓰기" : "목록 내어쓰기") {
@@ -184,13 +197,13 @@ final class ListItemEditor: NSObject {
         guard let textView else { return false }
         prepareForDrawing()
         let point = textView.convert(event.locationInWindow, from: nil)
-        guard let paragraph = checklistParagraphs().first(where: {
-            guard let rect = controlRect(forParagraphAt: $0.location) else { return false }
+        guard let target = checklistParagraphs().first(where: {
+            guard let rect = controlRect(forParagraphAt: $0.range.location) else { return false }
             return rect.insetBy(dx: -hitTargetInset, dy: -hitTargetInset).contains(point)
         }) else {
             return false
         }
-        toggleChecklist(in: paragraph)
+        toggleChecklist(in: target.range)
         return true
     }
 
@@ -233,12 +246,12 @@ final class ListItemEditor: NSObject {
 
     func drawControls(in dirtyRect: NSRect) {
         guard let textView else { return }
-        for paragraph in checklistParagraphs() {
+        for (paragraph, item) in checklistParagraphs() {
             guard let box = controlRect(forParagraphAt: paragraph.location),
-                  dirtyRect.intersects(box.insetBy(dx: -2, dy: -2)),
-                  let itemKind = kind(in: paragraph) else {
+                  dirtyRect.intersects(box.insetBy(dx: -2, dy: -2)) else {
                 continue
             }
+            let itemKind = item.kind
 
             textView.backgroundColor.setFill()
             box.insetBy(dx: -2, dy: -2).fill()
@@ -266,7 +279,7 @@ final class ListItemEditor: NSObject {
     func installCursorRects() {
         guard let textView else { return }
         prepareForDrawing()
-        for paragraph in checklistParagraphs() {
+        for (paragraph, _) in checklistParagraphs() {
             guard let rect = controlRect(forParagraphAt: paragraph.location) else { continue }
             textView.addCursorRect(
                 rect.insetBy(dx: -hitTargetInset, dy: -hitTargetInset),
@@ -417,22 +430,36 @@ final class ListItemEditor: NSObject {
         guard storage.length > 0, location < storage.length else { return 0 }
         let style = storage.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle
         let raw = Int(round((style?.firstLineHeadIndent ?? 0) / hierarchyIndent))
-        return ListItemSyntax.adjustedIndentLevel(0, by: raw)
+        return ListItemSyntax.storedIndentLevel(raw)
     }
 
-    private func checklistParagraphs() -> [NSRange] {
+    /// The nearest list row above this paragraph decides how deep this one may go; a plain
+    /// paragraph in between ends the list, so nothing above it counts as a parent.
+    private func levelOfListRowAbove(_ paragraph: NSRange) -> Int? {
+        guard let textView, paragraph.location > 0 else { return nil }
+        let source = textView.string as NSString
+        let previous = source.paragraphRange(for: NSRange(location: paragraph.location - 1, length: 0))
+        guard match(in: previous) != nil else { return nil }
+        return hierarchyLevel(at: previous.location)
+    }
+
+    private func listParagraphs() -> [(range: NSRange, item: ListItemMatch)] {
         guard let textView, !textView.string.isEmpty else { return [] }
         let source = textView.string as NSString
-        var result: [NSRange] = []
+        var result: [(range: NSRange, item: ListItemMatch)] = []
         var location = 0
         while location < source.length {
             let paragraph = source.paragraphRange(for: NSRange(location: location, length: 0))
-            if kind(in: paragraph)?.isChecklist == true {
-                result.append(paragraph)
+            if let item = match(in: paragraph) {
+                result.append((paragraph, item))
             }
             location = NSMaxRange(paragraph)
         }
         return result
+    }
+
+    private func checklistParagraphs() -> [(range: NSRange, item: ListItemMatch)] {
+        listParagraphs().filter { $0.item.kind.isChecklist }
     }
 
     private func visibleContentRange(in paragraph: NSRange) -> NSRange? {
@@ -497,7 +524,7 @@ final class ListItemEditor: NSObject {
             let rawLevel = item == nil ? 0 : Int(round((oldStyle?.firstLineHeadIndent ?? 0) / hierarchyIndent))
             paragraphs.append(ParagraphRecord(
                 range: range,
-                level: ListItemSyntax.adjustedIndentLevel(0, by: rawLevel),
+                level: ListItemSyntax.storedIndentLevel(rawLevel),
                 kind: item?.kind
             ))
             paragraphLocation = NSMaxRange(range)
@@ -608,19 +635,27 @@ final class ListItemEditor: NSObject {
             layoutManager.removeTemporaryAttribute(.strikethroughStyle, forCharacterRange: fullRange)
             layoutManager.removeTemporaryAttribute(.strikethroughColor, forCharacterRange: fullRange)
         }
-        for paragraph in checklistParagraphs() {
-            layoutManager.addTemporaryAttribute(
-                .foregroundColor,
-                value: NSColor.clear,
-                forCharacterRange: NSRange(location: paragraph.location, length: 1)
-            )
-            if kind(in: paragraph) == .checkedChecklist,
-               let contentRange = visibleContentRange(in: paragraph) {
-                layoutManager.addTemporaryAttributes([
-                    .foregroundColor: NSColor(calibratedWhite: 0.56, alpha: 1),
-                    .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                    .strikethroughColor: accentColor.withAlphaComponent(0.7),
-                ], forCharacterRange: contentRange)
+        for (paragraph, item) in listParagraphs() {
+            switch item.kind {
+            case .bullet, .ordered:
+                layoutManager.addTemporaryAttribute(
+                    .foregroundColor,
+                    value: markerColor,
+                    forCharacterRange: NSRange(location: paragraph.location, length: item.prefixLength)
+                )
+            case .uncheckedChecklist, .checkedChecklist:
+                layoutManager.addTemporaryAttribute(
+                    .foregroundColor,
+                    value: NSColor.clear,
+                    forCharacterRange: NSRange(location: paragraph.location, length: 1)
+                )
+                if item.kind == .checkedChecklist, let contentRange = visibleContentRange(in: paragraph) {
+                    layoutManager.addTemporaryAttributes([
+                        .foregroundColor: NSColor(calibratedWhite: 0.56, alpha: 1),
+                        .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                        .strikethroughColor: accentColor.withAlphaComponent(0.7),
+                    ], forCharacterRange: contentRange)
+                }
             }
         }
         presentationIsDirty = false

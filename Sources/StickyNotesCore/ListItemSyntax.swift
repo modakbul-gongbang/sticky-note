@@ -53,7 +53,6 @@ public struct ListItemConversion: Equatable, Sendable {
 }
 
 public enum ListItemSyntax {
-    public static let maximumIndentLevel = 1
 
     public static func conversion(linePrefix: String, insertedText: String) -> ListItemConversion? {
         guard insertedText == " " else { return nil }
@@ -106,7 +105,17 @@ public enum ListItemSyntax {
         return String(decoding: line.utf16.dropFirst(match.prefixLength), as: UTF16.self)
     }
 
-    public static func adjustedIndentLevel(_ current: Int, by delta: Int) -> Int {
-        min(maximumIndentLevel, max(0, current + delta))
+    /// A row may sit at most one level below the list row above it, so a list can nest as deep as
+    /// its own structure earns. `levelAbove` is nil when no list row precedes this one, which pins
+    /// the row to the outermost level.
+    public static func indentLevel(_ current: Int, adjustedBy delta: Int, levelAbove: Int?) -> Int {
+        let ceiling = (levelAbove ?? -1) + 1
+        return min(ceiling, max(0, current + delta))
+    }
+
+    /// A level read back from stored paragraph indentation; only the floor is enforced, because a
+    /// stored note's own nesting is the truth about its depth.
+    public static func storedIndentLevel(_ raw: Int) -> Int {
+        max(0, raw)
     }
 }

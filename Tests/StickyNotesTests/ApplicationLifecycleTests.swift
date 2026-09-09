@@ -229,6 +229,54 @@ import Testing
         #expect(sidebar.isHidden)
     }
 
+    @Test func controlTabShowsTheNoteListWithTheTargetSelectedAndWindowsLongLists() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let repository = try NoteRepository(rootURL: root)
+        for index in 1...10 {
+            try repository.save(
+                id: UUID(),
+                content: NSAttributedString(string: "노트 \(index)"),
+                modifiedAt: Date(timeIntervalSince1970: TimeInterval(index))
+            )
+        }
+        let controller = StickyPanelController(repository: repository)
+        let contentView = try #require(controller.window?.contentView)
+
+        controller.showPreviousNote()
+        contentView.layoutSubtreeIfNeeded()
+        func switchRows() -> [NSTextField] {
+            recursiveSubviews(of: contentView)
+                .compactMap { $0 as? NSTextField }
+                .filter { ["전환된 노트 제목", "전환 후보 노트 제목"].contains($0.accessibilityLabel() ?? "") }
+        }
+
+        let rows = switchRows()
+        let selected = try #require(rows.first { $0.accessibilityLabel() == "전환된 노트 제목" })
+        let position = try #require(recursiveSubviews(of: contentView).compactMap { $0 as? NSTextField }
+            .first { $0.accessibilityLabel() == "노트 순서" })
+
+        // Ten notes, seven rows: the switcher stays a card and still shows where the target sits.
+        #expect(rows.count == 7)
+        #expect(rows.filter { $0.accessibilityLabel() == "전환된 노트 제목" }.count == 1)
+        #expect(selected.stringValue == "노트 9")
+        #expect(position.stringValue == "2 / 10")
+        #expect(rows.allSatisfy { !$0.stringValue.isEmpty })
+        #expect(rows.map(\.stringValue).contains("노트 10"))
+
+        // Stepping to the far end of the cycle moves the window with the selection.
+        for _ in 0..<6 { controller.showPreviousNote() }
+        contentView.layoutSubtreeIfNeeded()
+        let laterRows = switchRows()
+        let laterSelected = try #require(laterRows.first { $0.accessibilityLabel() == "전환된 노트 제목" })
+        #expect(laterRows.count == 7)
+        #expect(laterSelected.stringValue == "노트 3")
+        #expect(!laterRows.map(\.stringValue).contains("노트 10"))
+    }
+
     @Test func headerTitleIsCentredOnTheToolbarRowAndTracksTheNote() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

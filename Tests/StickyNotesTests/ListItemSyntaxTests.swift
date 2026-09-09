@@ -27,11 +27,18 @@ import Testing
     @Test func continuationAndHierarchyFollowEditorConventions() {
         #expect(ListItemKind.checkedChecklist.continuation == .uncheckedChecklist)
         #expect(ListItemKind.bullet.continuation == .bullet)
-        #expect(ListItemSyntax.adjustedIndentLevel(0, by: -1) == 0)
-        #expect(ListItemSyntax.adjustedIndentLevel(0, by: 1) == 1)
-        #expect(ListItemSyntax.adjustedIndentLevel(1, by: 1) == 1)
-        #expect(ListItemSyntax.adjustedIndentLevel(1, by: -1) == 0)
-        #expect(ListItemSyntax.adjustedIndentLevel(3, by: -1) == 1)
+        // A row cannot indent past one level below the row above it, and outdenting stops at 0.
+        #expect(ListItemSyntax.indentLevel(0, adjustedBy: 1, levelAbove: nil) == 0)
+        #expect(ListItemSyntax.indentLevel(0, adjustedBy: 1, levelAbove: 0) == 1)
+        #expect(ListItemSyntax.indentLevel(1, adjustedBy: 1, levelAbove: 0) == 1)
+        #expect(ListItemSyntax.indentLevel(1, adjustedBy: 1, levelAbove: 1) == 2)
+        #expect(ListItemSyntax.indentLevel(2, adjustedBy: 1, levelAbove: 2) == 3)
+        #expect(ListItemSyntax.indentLevel(3, adjustedBy: -1, levelAbove: 3) == 2)
+        #expect(ListItemSyntax.indentLevel(0, adjustedBy: -1, levelAbove: 0) == 0)
+        // A row that drifted deeper than its parent allows is pulled back to the ceiling.
+        #expect(ListItemSyntax.indentLevel(4, adjustedBy: 0, levelAbove: 1) == 2)
+        #expect(ListItemSyntax.storedIndentLevel(3) == 3)
+        #expect(ListItemSyntax.storedIndentLevel(-1) == 0)
     }
 
     @Test func backspaceAtContentStartRemovesOnlyTheWholeListPrefix() {

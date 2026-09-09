@@ -22,8 +22,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private let sidebar = NSVisualEffectView()
     private let formatOverlay = NSVisualEffectView()
     private let noteSwitchOverlay = NSVisualEffectView()
+    private let noteSwitchList = NSStackView()
     private let headerTitleLabel = NSTextField(labelWithString: "")
-    private let noteSwitchTitleLabel = NSTextField(labelWithString: "")
     private let noteSwitchPositionLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private let wordCountLabel = NSTextField(labelWithString: "0단어")
@@ -38,7 +38,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private var suppressChanges = false
     private var isRefreshingRows = false
     private var showingTrash = false
-    private var noteCycleIDs: [UUID] = []
+    private var noteCycle: [NoteMetadata] = []
+    private let noteSwitchVisibleRows = 7
     private var escapeEventMonitor: Any?
     private weak var sidebarToggleButton: NSButton?
     private weak var formatToggleButton: NSButton?
@@ -96,7 +97,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     @objc func newNote() {
         saveNow()
-        noteCycleIDs.removeAll()
+        noteCycle.removeAll()
         showingTrash = false
         scopeControl.selectedSegment = 0
         currentID = UUID()
@@ -223,7 +224,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     func textDidChange(_ notification: Notification) {
         guard !suppressChanges else { return }
-        noteCycleIDs.removeAll()
+        noteCycle.removeAll()
         autosaveTimer?.invalidate()
         updateTitle()
         updateWordCount()
@@ -274,7 +275,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         guard !isRefreshingRows else { return }
         let index = tableView.selectedRow
         guard index >= 0, index < rows.count, rows[index].id != currentID else { return }
-        noteCycleIDs.removeAll()
+        noteCycle.removeAll()
         saveNow()
         loadNote(id: rows[index].id)
         closeOverlays()
@@ -364,6 +365,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         sidebar.isHidden = true
         formatOverlay.isHidden = true
         noteSwitchOverlay.isHidden = true
+        let preferredSwitchOverlayWidth = noteSwitchOverlay.widthAnchor.constraint(equalToConstant: 320)
+        preferredSwitchOverlayWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
             header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
@@ -385,9 +388,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             formatOverlay.bottomAnchor.constraint(equalTo: formatButton.topAnchor, constant: -8),
             noteSwitchOverlay.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             noteSwitchOverlay.centerYAnchor.constraint(equalTo: editorScroll.centerYAnchor),
-            noteSwitchOverlay.widthAnchor.constraint(equalToConstant: 280),
+            preferredSwitchOverlayWidth,
             noteSwitchOverlay.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -40),
-            noteSwitchOverlay.heightAnchor.constraint(equalToConstant: 78),
             formatButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
             formatButton.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
             wordCountLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
@@ -609,12 +611,11 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         noteSwitchOverlay.layer?.borderColor = NSColor(calibratedWhite: 0.42, alpha: 0.55).cgColor
         noteSwitchOverlay.setAccessibilityLabel("노트 전환 안내")
 
-        noteSwitchTitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        noteSwitchTitleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
-        noteSwitchTitleLabel.textColor = NSColor(calibratedWhite: 0.94, alpha: 1)
-        noteSwitchTitleLabel.alignment = .center
-        noteSwitchTitleLabel.lineBreakMode = .byTruncatingTail
-        noteSwitchTitleLabel.setAccessibilityLabel("전환된 노트 제목")
+        noteSwitchList.translatesAutoresizingMaskIntoConstraints = false
+        noteSwitchList.orientation = .vertical
+        noteSwitchList.alignment = .leading
+        noteSwitchList.spacing = 1
+        noteSwitchList.setAccessibilityLabel("전환할 노트 목록")
 
         noteSwitchPositionLabel.translatesAutoresizingMaskIntoConstraints = false
         noteSwitchPositionLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
@@ -622,16 +623,56 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         noteSwitchPositionLabel.alignment = .center
         noteSwitchPositionLabel.setAccessibilityLabel("노트 순서")
 
-        noteSwitchOverlay.addSubview(noteSwitchTitleLabel)
+        noteSwitchOverlay.addSubview(noteSwitchList)
         noteSwitchOverlay.addSubview(noteSwitchPositionLabel)
         NSLayoutConstraint.activate([
-            noteSwitchTitleLabel.topAnchor.constraint(equalTo: noteSwitchOverlay.topAnchor, constant: 15),
-            noteSwitchTitleLabel.leadingAnchor.constraint(equalTo: noteSwitchOverlay.leadingAnchor, constant: 18),
-            noteSwitchTitleLabel.trailingAnchor.constraint(equalTo: noteSwitchOverlay.trailingAnchor, constant: -18),
-            noteSwitchPositionLabel.topAnchor.constraint(equalTo: noteSwitchTitleLabel.bottomAnchor, constant: 7),
+            noteSwitchList.topAnchor.constraint(equalTo: noteSwitchOverlay.topAnchor, constant: 10),
+            noteSwitchList.leadingAnchor.constraint(equalTo: noteSwitchOverlay.leadingAnchor, constant: 10),
+            noteSwitchList.trailingAnchor.constraint(equalTo: noteSwitchOverlay.trailingAnchor, constant: -10),
+            noteSwitchPositionLabel.topAnchor.constraint(equalTo: noteSwitchList.bottomAnchor, constant: 8),
             noteSwitchPositionLabel.leadingAnchor.constraint(equalTo: noteSwitchOverlay.leadingAnchor, constant: 18),
             noteSwitchPositionLabel.trailingAnchor.constraint(equalTo: noteSwitchOverlay.trailingAnchor, constant: -18),
+            noteSwitchPositionLabel.bottomAnchor.constraint(equalTo: noteSwitchOverlay.bottomAnchor, constant: -11),
         ])
+    }
+
+    /// One row of the Ctrl+Tab list. Only the selected row gets a container: it carries the
+    /// selection, which spacing alone cannot express.
+    private func noteSwitchRow(title: String, isSelected: Bool) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.wantsLayer = true
+        row.layer?.cornerRadius = 7
+        row.layer?.backgroundColor = isSelected ? accentColor.cgColor : NSColor.clear.cgColor
+
+        let label = NSTextField(labelWithString: title)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .systemFont(ofSize: 13, weight: isSelected ? .semibold : .regular)
+        label.alignment = .left
+        label.textColor = isSelected
+            ? NSColor(calibratedWhite: 1, alpha: 1)
+            : NSColor(calibratedWhite: 0.66, alpha: 1)
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        label.setAccessibilityLabel(isSelected ? "전환된 노트 제목" : "전환 후보 노트 제목")
+
+        row.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -10),
+            label.topAnchor.constraint(equalTo: row.topAnchor, constant: 5),
+            label.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -5),
+        ])
+        return row
+    }
+
+    /// A long note list is windowed around the selection, so the overlay stays a readable card
+    /// instead of growing past the panel.
+    private func noteSwitchWindow(count: Int, selected: Int) -> Range<Int> {
+        guard count > noteSwitchVisibleRows else { return 0..<count }
+        let start = min(max(0, selected - noteSwitchVisibleRows / 2), count - noteSwitchVisibleRows)
+        return start..<(start + noteSwitchVisibleRows)
     }
 
     private func formatActionButton(title: String, symbol: String, action: Selector, tint: NSColor? = nil) -> NSButton {
@@ -753,7 +794,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     @objc private func scopeChanged() {
-        noteCycleIDs.removeAll()
+        noteCycle.removeAll()
         saveNow()
         showingTrash = scopeControl.selectedSegment == 1
         if let actions = sidebar.subviews.first(where: { $0.identifier?.rawValue == "TrashActions" }) {
@@ -815,26 +856,36 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         showingTrash = false
         scopeControl.selectedSegment = 0
         searchField.stringValue = ""
-        let activeIDs = repository.list().map(\.id)
-        if noteCycleIDs.isEmpty || Set(noteCycleIDs) != Set(activeIDs) || !noteCycleIDs.contains(currentID) {
-            noteCycleIDs = activeIDs
+        let active = repository.list()
+        if noteCycle.isEmpty
+            || Set(noteCycle.map(\.id)) != Set(active.map(\.id))
+            || !noteCycle.contains(where: { $0.id == currentID }) {
+            noteCycle = active
         }
-        guard noteCycleIDs.count > 1,
-              let currentIndex = noteCycleIDs.firstIndex(of: currentID) else {
+        guard noteCycle.count > 1,
+              let currentIndex = noteCycle.firstIndex(where: { $0.id == currentID }) else {
             closeOverlays()
             return
         }
-        let targetIndex = (currentIndex + step + noteCycleIDs.count) % noteCycleIDs.count
+        let targetIndex = (currentIndex + step + noteCycle.count) % noteCycle.count
         closeOverlays(focusEditor: false)
-        loadNote(id: noteCycleIDs[targetIndex])
-        showNoteSwitchOverlay(position: targetIndex + 1, count: noteCycleIDs.count)
+        loadNote(id: noteCycle[targetIndex].id)
+        showNoteSwitchOverlay(selectedIndex: targetIndex)
         panel.makeFirstResponder(editor)
     }
 
-    private func showNoteSwitchOverlay(position: Int, count: Int) {
+    private func showNoteSwitchOverlay(selectedIndex: Int) {
         noteSwitchTimer?.invalidate()
-        noteSwitchTitleLabel.stringValue = panel.title
-        noteSwitchPositionLabel.stringValue = "\(position) / \(count)"
+        for row in noteSwitchList.arrangedSubviews {
+            noteSwitchList.removeArrangedSubview(row)
+            row.removeFromSuperview()
+        }
+        for index in noteSwitchWindow(count: noteCycle.count, selected: selectedIndex) {
+            let row = noteSwitchRow(title: noteCycle[index].title, isSelected: index == selectedIndex)
+            noteSwitchList.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: noteSwitchList.widthAnchor).isActive = true
+        }
+        noteSwitchPositionLabel.stringValue = "\(selectedIndex + 1) / \(noteCycle.count)"
         noteSwitchOverlay.superview?.addSubview(noteSwitchOverlay, positioned: .above, relativeTo: nil)
         noteSwitchOverlay.isHidden = false
         noteSwitchTimer = Timer.scheduledTimer(withTimeInterval: 1.15, repeats: false) { [weak self] _ in
@@ -895,7 +946,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     private func newNoteForCurrentScope() {
-        noteCycleIDs.removeAll()
+        noteCycle.removeAll()
         currentID = UUID()
         replaceEditorContent(with: NSAttributedString())
         editor.isEditable = !showingTrash
