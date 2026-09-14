@@ -599,6 +599,32 @@ import Testing
         }
     }
 
+    @Test func strikethroughSurvivesTheReloadNormalizer() throws {
+        let editor = configuredEditor()
+        let content = NSMutableAttributedString(string: "끝낸 일\n남은 일")
+        content.addAttribute(
+            .strikethroughStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: (content.string as NSString).range(of: "끝낸 일")
+        )
+        editor.requiredTextStorage.setAttributedString(content)
+
+        _ = editor.reloadListPresentation()
+
+        let struck = (editor.string as NSString).range(of: "끝낸 일")
+        let plain = (editor.string as NSString).range(of: "남은 일")
+        #expect(editor.requiredTextStorage.attribute(
+            .strikethroughStyle,
+            at: struck.location,
+            effectiveRange: nil
+        ) as? Int == NSUnderlineStyle.single.rawValue)
+        #expect(editor.requiredTextStorage.attribute(
+            .strikethroughStyle,
+            at: plain.location,
+            effectiveRange: nil
+        ) == nil)
+    }
+
     @Test func loadedContentOccupiesTheVisibleEditorViewport() {
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 600))
         scrollView.hasVerticalScroller = true

@@ -162,15 +162,64 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
                 ? NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
                 : NSFontManager.shared.convert(baseFont, toNotHaveTrait: .boldFontMask)
         } else {
-            editor.requiredTextStorage.enumerateAttribute(.font, in: selection) { value, range, _ in
-                let font = value as? NSFont ?? baseFont
-                let converted = makeBold
-                    ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
-                    : NSFontManager.shared.convert(font, toNotHaveTrait: .boldFontMask)
-                editor.requiredTextStorage.addAttribute(.font, value: converted, range: range)
+            editAttributes(in: selection, actionName: "굵게") {
+                editor.requiredTextStorage.enumerateAttribute(.font, in: selection) { value, range, _ in
+                    let font = value as? NSFont ?? baseFont
+                    let converted = makeBold
+                        ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+                        : NSFontManager.shared.convert(font, toNotHaveTrait: .boldFontMask)
+                    editor.requiredTextStorage.addAttribute(.font, value: converted, range: range)
+                }
             }
-            editor.didChangeText()
         }
+    }
+
+    @objc func toggleStrikethrough() {
+        panel.makeFirstResponder(editor)
+        let selection = editor.selectedRange()
+        let turningOn = !strikethroughIsActive(in: selection)
+        guard selection.length > 0 else {
+            if turningOn {
+                editor.typingAttributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+            } else {
+                editor.typingAttributes.removeValue(forKey: .strikethroughStyle)
+            }
+            return
+        }
+        editAttributes(in: selection, actionName: "취소선") {
+            if turningOn {
+                editor.requiredTextStorage.addAttribute(
+                    .strikethroughStyle,
+                    value: NSUnderlineStyle.single.rawValue,
+                    range: selection
+                )
+            } else {
+                editor.requiredTextStorage.removeAttribute(.strikethroughStyle, range: selection)
+            }
+        }
+    }
+
+    private func strikethroughIsActive(in selection: NSRange) -> Bool {
+        let value: Any?
+        if selection.length == 0 {
+            value = editor.typingAttributes[.strikethroughStyle]
+        } else {
+            value = editor.requiredTextStorage.attribute(
+                .strikethroughStyle,
+                at: selection.location,
+                effectiveRange: nil
+            )
+        }
+        return (value as? Int ?? 0) != 0
+    }
+
+    /// An attribute-only edit still has to pass through the text view's change cycle, or the
+    /// formatting command lands outside the undo stack and Cmd+Z skips over it.
+    private func editAttributes(in range: NSRange, actionName: String, mutation: () -> Void) {
+        guard editor.shouldChangeText(in: range, replacementString: nil) else { return }
+        mutation()
+        editor.didChangeText()
+        editor.undoManager?.setActionName(actionName)
     }
 
     @objc func toggleChecklistLine() {
@@ -576,6 +625,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
         let buttons = [
             formatActionButton(title: "굵게", symbol: "bold", action: #selector(applyBoldFromMenu)),
+            formatActionButton(title: "취소선", symbol: "strikethrough", action: #selector(applyStrikethroughFromMenu)),
             formatActionButton(title: "글머리 기호", symbol: "list.bullet", action: #selector(applyListFromMenu)),
             formatActionButton(title: "번호 목록", symbol: "list.number", action: #selector(applyOrderedListFromMenu)),
             formatActionButton(title: "체크리스트", symbol: "checklist", action: #selector(applyChecklistFromMenu), tint: accentColor),
@@ -757,6 +807,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     @objc private func applyBoldFromMenu() { toggleBold(); closeOverlays() }
+    @objc private func applyStrikethroughFromMenu() { toggleStrikethrough(); closeOverlays() }
     @objc private func applyListFromMenu() { editor.insertListItem(.bullet); closeOverlays() }
     @objc private func applyOrderedListFromMenu() { editor.insertListItem(.ordered(1)); closeOverlays() }
     @objc private func applyChecklistFromMenu() { editor.insertListItem(.uncheckedChecklist); closeOverlays() }

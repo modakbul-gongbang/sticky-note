@@ -84,9 +84,15 @@ import Testing
         • 마커는 강조색으로
         ☐\t남은 확인
         ☑\t끝낸 확인
+        직접 그은 취소선
         """
         let content = NSMutableAttributedString(string: text)
         let source = content.string as NSString
+        content.addAttribute(
+            .strikethroughStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: source.range(of: "직접 그은 취소선")
+        )
         for (row, level) in [("바로 위 줄", 1), ("그 아래로", 2), ("마커는", 1)] {
             let style = NSMutableParagraphStyle()
             style.firstLineHeadIndent = CGFloat(level) * 24

@@ -277,6 +277,69 @@ import Testing
         #expect(!laterRows.map(\.stringValue).contains("노트 10"))
     }
 
+    @Test func strikethroughMarksASelectionDoneAndIsUndoable() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
+        let contentView = try #require(controller.window?.contentView)
+        let descendants = recursiveSubviews(of: contentView)
+        let editor = try #require(descendants.compactMap { $0 as? RichTextView }.first)
+        let undoManager = try #require(editor.undoManager)
+        undoManager.groupsByEvent = false
+        func performUserAction(_ action: () -> Void) {
+            undoManager.beginUndoGrouping()
+            action()
+            undoManager.endUndoGrouping()
+        }
+        performUserAction {
+            editor.insertText("끝낸 일 남은 일", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        let done = (editor.string as NSString).range(of: "끝낸 일")
+
+        func strikethrough(at location: Int) -> Int {
+            editor.requiredTextStorage.attribute(
+                .strikethroughStyle,
+                at: location,
+                effectiveRange: nil
+            ) as? Int ?? 0
+        }
+
+        editor.setSelectedRange(done)
+        performUserAction { controller.toggleStrikethrough() }
+        #expect(strikethrough(at: done.location) == NSUnderlineStyle.single.rawValue)
+        #expect(strikethrough(at: NSMaxRange(done)) == 0, "the rest of the line is untouched")
+
+        undoManager.undo()
+        #expect(editor.string == "끝낸 일 남은 일", "undo takes back the formatting, not the text")
+        #expect(strikethrough(at: done.location) == 0)
+        undoManager.redo()
+        #expect(strikethrough(at: done.location) == NSUnderlineStyle.single.rawValue)
+
+        // A second press on the same selection clears it.
+        editor.setSelectedRange(done)
+        performUserAction { controller.toggleStrikethrough() }
+        #expect(strikethrough(at: done.location) == 0)
+
+        // With no selection the command arms the next characters typed.
+        editor.setSelectedRange(NSRange(location: editor.requiredTextStorage.length, length: 0))
+        controller.toggleStrikethrough()
+        performUserAction {
+            editor.insertText(" 추가", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        #expect(strikethrough(at: editor.requiredTextStorage.length - 1) == NSUnderlineStyle.single.rawValue)
+
+        let noteMenu = try #require(AppDelegate().makeMainMenu(for: controller).items
+            .first(where: { $0.submenu?.title == "노트" })?.submenu)
+        let strike = try #require(noteMenu.items.first(where: { $0.title == "취소선" }))
+        #expect(strike.action == #selector(StickyPanelController.toggleStrikethrough))
+        #expect(strike.keyEquivalent == "X")
+        #expect(strike.keyEquivalentModifierMask == [.command, .shift])
+        #expect(recursiveSubviews(of: contentView).compactMap { $0 as? NSButton }.contains { $0.title == "취소선" })
+    }
+
     @Test func headerTitleIsCentredOnTheToolbarRowAndTracksTheNote() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

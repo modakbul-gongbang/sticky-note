@@ -545,6 +545,9 @@ final class ListItemEditor: NSObject {
             if let attachment = attributes[.attachment] {
                 supported[.attachment] = attachment
             }
+            if let strikethrough = attributes[.strikethroughStyle] as? Int, strikethrough != 0 {
+                supported[.strikethroughStyle] = strikethrough
+            }
             runs.append((range, supported))
         }
         for (range, attributes) in runs {
