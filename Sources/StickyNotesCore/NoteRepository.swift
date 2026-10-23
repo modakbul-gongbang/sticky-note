@@ -58,8 +58,14 @@ public final class NoteRepository {
             .max { $0.modifiedAt < $1.modifiedAt }
     }
 
-    public func daysWithDailyNotes() -> Set<String> {
-        Set(metadata.filter { !$0.isTrashed }.compactMap(\.dailyDay))
+    /// Every day that has a page, with its checklist tally read from the indexed text.
+    public func dailyTaskCounts() -> [String: TaskCount] {
+        var counts: [String: TaskCount] = [:]
+        for item in metadata where !item.isTrashed {
+            guard let day = item.dailyDay else { continue }
+            counts[day] = TaskCount(text: item.searchText)
+        }
+        return counts
     }
 
     public func load(id: UUID) throws -> StoredNote {

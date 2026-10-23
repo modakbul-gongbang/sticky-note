@@ -621,13 +621,13 @@ import Testing
         #expect(dayEditor.string == "☐\t")
         #expect(noteEditor.string == "일반 노트")
         controller.hidePanel()
-        #expect(repository.daysWithDailyNotes().isEmpty)
+        #expect(repository.dailyTaskCounts().isEmpty)
 
         dayEditor.setSelectedRange(NSRange(location: dayEditor.string.utf16.count, length: 0))
         dayEditor.insertText("장보기", replacementRange: NSRange(location: NSNotFound, length: 0))
         controller.textDidChange(Notification(name: NSText.didChangeNotification, object: dayEditor))
         controller.hidePanel()
-        #expect(repository.daysWithDailyNotes() == ["2026-10-23"])
+        #expect(repository.dailyTaskCounts() == ["2026-10-23": TaskCount(total: 1, done: 0)])
         #expect(repository.list().map(\.title) == ["일반 노트"])
         #expect(noteEditor.string == "일반 노트")
 
@@ -696,6 +696,106 @@ import Testing
         contentView.layoutSubtreeIfNeeded()
         #expect(!pane.isHidden)
         #expect(noteScroll.frame.height == sharedHeight)
+    }
+
+    @Test func draggingTheDividerResizesThePanesInsteadOfMovingTheWindow() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = UserDefaults.standard
+        let saved = (defaults.object(forKey: "todayPane.height"), defaults.object(forKey: "todayPane.collapsed"))
+        defer {
+            defaults.set(saved.0, forKey: "todayPane.height")
+            defaults.set(saved.1, forKey: "todayPane.collapsed")
+        }
+
+        let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
+        let window = try #require(controller.window)
+        let contentView = try #require(window.contentView)
+        controller.openToday()
+        contentView.layoutSubtreeIfNeeded()
+        let descendants = recursiveSubviews(of: contentView)
+        let divider = try #require(descendants.compactMap { $0 as? PaneDivider }.first)
+        let noteScroll = try #require(descendants.compactMap { $0 as? RichTextView }.first {
+            $0.accessibilityLabel() == "노트 편집기"
+        }?.enclosingScrollView)
+        #expect(divider.mouseDownCanMoveWindow == false)
+
+        func mouse(_ type: NSEvent.EventType, y: CGFloat) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(
+                with: type, location: NSPoint(x: 200, y: y), modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            ))
+        }
+        let before = noteScroll.frame.height
+        let start = divider.convert(NSPoint(x: divider.bounds.midX, y: divider.bounds.midY), to: nil).y
+        divider.mouseDown(with: try mouse(.leftMouseDown, y: start))
+        divider.mouseDragged(with: try mouse(.leftMouseDragged, y: start + 60))
+        divider.mouseUp(with: try mouse(.leftMouseUp, y: start + 60))
+        contentView.layoutSubtreeIfNeeded()
+        #expect(noteScroll.frame.height == before + 60)
+    }
+
+    @Test func zoomMagnifiesBothEditorsAndKeepsTextWrappedToTheWindow() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let savedZoom = UserDefaults.standard.object(forKey: "editor.zoom")
+        defer { UserDefaults.standard.set(savedZoom, forKey: "editor.zoom") }
+
+        let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
+        let contentView = try #require(controller.window?.contentView)
+        let editors = recursiveSubviews(of: contentView).compactMap { $0 as? RichTextView }
+        controller.resetZoom()
+        controller.zoomIn()
+        controller.zoomIn()
+        for editor in editors {
+            let scroll = try #require(editor.enclosingScrollView)
+            #expect(scroll.magnification == 1.25)
+            #expect(abs(editor.frame.width - scroll.contentView.bounds.width) < 1)
+            #expect(editor.frame.width < scroll.frame.width)
+        }
+        controller.resetZoom()
+        #expect(editors.allSatisfy { $0.enclosingScrollView?.magnification == 1 })
+    }
+
+    @Test func monthCalendarShowsTaskProgressAndPicksADay() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let today = Date()
+        let repository = try NoteRepository(rootURL: root)
+        try repository.save(
+            id: UUID(),
+            content: NSAttributedString(string: "☑\tHide 런칭하기\n☐\t글 쓰기"),
+            dailyDay: DailyNote.dayKey(for: today)
+        )
+        let controller = StickyPanelController(repository: repository)
+        let contentView = try #require(controller.window?.contentView)
+        let descendants = recursiveSubviews(of: contentView)
+        let month = try #require(descendants.compactMap { $0 as? MonthCalendarView }.first)
+        let dayEditor = try #require(descendants.compactMap { $0 as? RichTextView }.first {
+            $0.accessibilityLabel() == "오늘 할 일 편집기"
+        })
+
+        controller.setMonthCalendarShown(true)
+        #expect(!month.isHidden)
+        contentView.layoutSubtreeIfNeeded()
+        let cells = recursiveSubviews(of: month).compactMap { $0 as? DayButton }
+        #expect(cells.count == 42)
+        #expect(cells.allSatisfy { $0.frame.width > 40 && $0.frame.height >= 28 })
+        #expect(!month.hasAmbiguousLayout)
+        let todayCell = try #require(cells.first { $0.isToday })
+        #expect(todayCell.accessibilityLabel() == "\(DailyNote.title(for: today)), 할 일 2개 중 1개 완료")
+
+        let other = try #require(cells.first { !$0.isToday && !$0.isOutsideMonth })
+        _ = other.target?.perform(other.action, with: other)
+        #expect(month.isHidden)
+        #expect(dayEditor.string == "☐\t")
     }
 
     private func recursiveSubviews(of view: NSView) -> [NSView] {

@@ -183,7 +183,7 @@ import Testing
         #expect(reopened.dailyNote(day: "2026-10-23")?.id == id)
         #expect(reopened.dailyNote(day: "2026-10-24") == nil)
         #expect(reopened.list().map(\.title) == ["일반 노트"])
-        #expect(reopened.daysWithDailyNotes() == ["2026-10-23"])
+        #expect(reopened.dailyTaskCounts() == ["2026-10-23": TaskCount(total: 1, done: 1)])
 
         try reopened.moveToTrash(id: id)
         #expect(reopened.dailyNote(day: "2026-10-23") == nil)
@@ -195,6 +195,20 @@ import Testing
         let sunday = try #require(ISO8601DateFormatter().date(from: "2026-10-25T03:00:00Z"))
         let week = DailyNote.week(containing: sunday, calendar: seoul).map { DailyNote.dayKey(for: $0, calendar: seoul) }
         #expect(week == ["2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23", "2026-10-24", "2026-10-25"])
+    }
+
+    @Test func monthGridIsSixMondayFirstWeeks() throws {
+        let october = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 23, hour: 9)))
+        let grid = DailyNote.monthGrid(containing: october).map { DailyNote.dayKey(for: $0) }
+        #expect(grid.count == 42)
+        #expect(grid.first == "2026-09-28")
+        #expect(grid.contains("2026-10-01") && grid.contains("2026-10-31"))
+        #expect(grid.last == "2026-11-08")
+    }
+
+    @Test func taskCountIgnoresEmptyCheckboxesAndOtherLines() {
+        let count = TaskCount(text: "Core Tasks\n☐\tHide 런칭하기\n☑\t투표 모니터링\n☐\t\n• 메모\n☑\t글 쓰기")
+        #expect(count == TaskCount(total: 3, done: 2))
     }
 
     @Test func pageHoldingOnlyEmptyCheckboxesCountsAsBlank() {

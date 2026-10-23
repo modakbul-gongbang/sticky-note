@@ -98,6 +98,30 @@ public enum NoteContent {
     }
 }
 
+public struct TaskCount: Equatable, Sendable {
+    public let total: Int
+    public let done: Int
+
+    public init(total: Int, done: Int) {
+        self.total = total
+        self.done = done
+    }
+
+    /// Counts checklist rows that carry text; an empty checkbox is a slot, not a task.
+    public init(text: String) {
+        var total = 0
+        var done = 0
+        for line in text.components(separatedBy: .newlines) {
+            guard let match = ListItemSyntax.match(in: line), match.kind.isChecklist,
+                  !String(decoding: line.utf16.dropFirst(match.prefixLength), as: UTF16.self)
+                      .trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            total += 1
+            if match.kind == .checkedChecklist { done += 1 }
+        }
+        self.init(total: total, done: done)
+    }
+}
+
 /// A daily to-do page is an ordinary note keyed by its local day; the key, not the editable
 /// first line, is what finds today's page again.
 public enum DailyNote {
@@ -122,6 +146,21 @@ public enum DailyNote {
                 preconditionFailure("Gregorian day arithmetic always succeeds")
             }
             return date
+        }
+    }
+
+    /// Six Monday-first weeks covering the month of `date`, padded with the neighbouring
+    /// months' days so every month draws as the same grid.
+    public static func monthGrid(containing date: Date, calendar: Calendar = .current) -> [Date] {
+        guard let first = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) else {
+            preconditionFailure("Gregorian month components are always present")
+        }
+        let monday = week(containing: first, calendar: calendar)[0]
+        return (0..<42).map { offset in
+            guard let day = calendar.date(byAdding: .day, value: offset, to: monday) else {
+                preconditionFailure("Gregorian day arithmetic always succeeds")
+            }
+            return day
         }
     }
 

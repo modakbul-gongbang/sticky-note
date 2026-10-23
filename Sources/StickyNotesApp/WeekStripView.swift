@@ -1,16 +1,19 @@
 import AppKit
 import StickyNotesCore
 
-/// One day of the week strip. It draws its own weekday, date number, and content dot so the
-/// row stays a quiet line of text; only the selected day gets a filled background.
+/// One day in the week strip or the month grid. It draws its own weekday, date number, and
+/// task ring so the calendar stays a quiet field of text; only the selected day is filled.
+/// The ring's accent arc is the share of the day's tasks that are done.
 final class DayButton: NSButton {
-    var weekdayText = ""
+    var weekdayText: String?
     var dayText = ""
     var isToday = false
     var isSelectedDay = false
-    var hasContent = false
+    var isOutsideMonth = false
+    var taskCount: TaskCount?
     var accentColor = NSColor.systemRed
 
+    // NSButton draws in flipped coordinates: y grows downward from the top edge.
     override func draw(_ dirtyRect: NSRect) {
         if isSelectedDay {
             NSColor(calibratedWhite: 0.15, alpha: 1).setFill()
@@ -18,56 +21,98 @@ final class DayButton: NSButton {
         }
         let centered = NSMutableParagraphStyle()
         centered.alignment = .center
-        let weekday = NSAttributedString(string: weekdayText, attributes: [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-            .foregroundColor: NSColor(calibratedWhite: 0.42, alpha: 1),
-            .paragraphStyle: centered,
-        ])
-        let dayColor: NSColor = isToday
-            ? accentColor
-            : NSColor(calibratedWhite: isSelectedDay ? 0.96 : 0.66, alpha: 1)
-        let day = NSAttributedString(string: dayText, attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 14, weight: isSelectedDay || isToday ? .semibold : .regular),
+        if let weekdayText {
+            NSAttributedString(string: weekdayText, attributes: [
+                .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+                .foregroundColor: NSColor(calibratedWhite: 0.42, alpha: 1),
+                .paragraphStyle: centered,
+            ]).draw(in: NSRect(x: 0, y: 3, width: bounds.width, height: 13))
+        }
+        let numberCenter = NSPoint(x: bounds.midX, y: weekdayText == nil ? bounds.midY : bounds.height - 18)
+        let dayColor: NSColor
+        if isToday {
+            dayColor = accentColor
+        } else if isOutsideMonth {
+            dayColor = NSColor(calibratedWhite: 0.3, alpha: 1)
+        } else {
+            dayColor = NSColor(calibratedWhite: isSelectedDay ? 0.96 : 0.66, alpha: 1)
+        }
+        NSAttributedString(string: dayText, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: isSelectedDay || isToday ? .semibold : .regular),
             .foregroundColor: dayColor,
             .paragraphStyle: centered,
-        ])
-        // NSButton draws in flipped coordinates: y grows downward from the top edge.
-        weekday.draw(in: NSRect(x: 0, y: 4, width: bounds.width, height: 14))
-        day.draw(in: NSRect(x: 0, y: 18, width: bounds.width, height: 19))
-        if hasContent {
+        ]).draw(in: NSRect(x: 0, y: numberCenter.y - 8.5, width: bounds.width, height: 17))
+        drawTaskMark(around: numberCenter)
+    }
+
+    private func drawTaskMark(around center: NSPoint) {
+        guard let taskCount else { return }
+        let radius: CGFloat = 12
+        guard taskCount.total > 0 else {
             NSColor(calibratedWhite: 0.5, alpha: 1).setFill()
-            NSBezierPath(ovalIn: NSRect(x: bounds.midX - 2, y: bounds.height - 7, width: 4, height: 4)).fill()
+            NSBezierPath(ovalIn: NSRect(x: center.x - 2, y: center.y + radius + 1, width: 4, height: 4)).fill()
+            return
         }
+        let track = NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+        track.lineWidth = 1.5
+        NSColor(calibratedWhite: 0.26, alpha: 1).setStroke()
+        track.stroke()
+        guard taskCount.done > 0 else { return }
+        let arc = NSBezierPath()
+        let fraction = CGFloat(taskCount.done) / CGFloat(taskCount.total)
+        // In flipped coordinates increasing angles run clockwise on screen, from 12 o'clock.
+        arc.appendArc(withCenter: center, radius: radius, startAngle: -90, endAngle: -90 + 360 * fraction, clockwise: false)
+        arc.lineWidth = 2
+        arc.lineCapStyle = .round
+        accentColor.setStroke()
+        arc.stroke()
+    }
+
+    func configure(day: Date, weekday: String?, selected: Date, today: Date, taskCount: TaskCount?, outsideMonth: Bool) {
+        weekdayText = weekday
+        dayText = String(Calendar.current.component(.day, from: day))
+        isToday = DailyNote.dayKey(for: day) == DailyNote.dayKey(for: today)
+        isSelectedDay = DailyNote.dayKey(for: day) == DailyNote.dayKey(for: selected)
+        isOutsideMonth = outsideMonth
+        self.taskCount = taskCount
+        let title = DailyNote.title(for: day)
+        let label = taskCount.map { $0.total > 0 ? "\(title), 할 일 \($0.total)개 중 \($0.done)개 완료" : title } ?? title
+        setAccessibilityLabel(label)
+        toolTip = label
+        needsDisplay = true
     }
 }
 
-/// Monday-to-Sunday row above today's page. Choosing a day, or stepping a week with the
+private func chevronButton(symbol: String, label: String, target: AnyObject, action: Selector) -> NSButton {
+    let button = NSButton()
+    button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+    button.imagePosition = .imageOnly
+    button.isBordered = false
+    button.contentTintColor = NSColor(calibratedWhite: 0.45, alpha: 1)
+    button.target = target
+    button.action = action
+    button.setAccessibilityLabel(label)
+    button.toolTip = label
+    button.translatesAutoresizingMaskIntoConstraints = false
+    return button
+}
+
+/// Monday-to-Sunday row above the day's page. Choosing a day, or stepping a week with the
 /// arrows, reports the chosen date; the controller decides what that day shows.
 final class WeekStripView: NSView {
     var onSelectDay: ((Date) -> Void)?
+    var onShowMonth: (() -> Void)?
     private let dayButtons: [DayButton] = (0..<7).map { _ in DayButton(title: "", target: nil, action: nil) }
-    private let previousButton = NSButton()
-    private let nextButton = NSButton()
     private var days: [Date] = []
     private var selected = Date()
 
     init(accentColor: NSColor) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        for (button, symbol, label, action) in [
-            (previousButton, "chevron.left", "지난주", #selector(showPreviousWeek)),
-            (nextButton, "chevron.right", "다음 주", #selector(showNextWeek)),
-        ] {
-            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
-            button.imagePosition = .imageOnly
-            button.isBordered = false
-            button.contentTintColor = NSColor(calibratedWhite: 0.45, alpha: 1)
-            button.target = self
-            button.action = action
-            button.setAccessibilityLabel(label)
-            button.translatesAutoresizingMaskIntoConstraints = false
-            button.widthAnchor.constraint(equalToConstant: 18).isActive = true
-        }
+        let previous = chevronButton(symbol: "chevron.left", label: "지난주", target: self, action: #selector(showPreviousWeek))
+        let next = chevronButton(symbol: "chevron.right", label: "다음 주", target: self, action: #selector(showNextWeek))
+        let month = chevronButton(symbol: "chevron.compact.down", label: "월 달력 보기", target: self, action: #selector(showMonth))
+        for button in [previous, next] { button.widthAnchor.constraint(equalToConstant: 18).isActive = true }
         for (index, button) in dayButtons.enumerated() {
             button.isBordered = false
             button.tag = index
@@ -76,42 +121,43 @@ final class WeekStripView: NSView {
             button.accentColor = accentColor
             button.translatesAutoresizingMaskIntoConstraints = false
         }
-        let stack = NSStackView(views: [previousButton] + dayButtons + [nextButton])
-        stack.orientation = .horizontal
-        stack.distribution = .fill
-        stack.spacing = 0
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        let row = NSStackView(views: [previous] + dayButtons + [next])
+        row.orientation = .horizontal
+        row.distribution = .fill
+        row.spacing = 0
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        addSubview(month)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            heightAnchor.constraint(equalToConstant: 46),
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.heightAnchor.constraint(equalToConstant: 50),
+            month.topAnchor.constraint(equalTo: row.bottomAnchor),
+            month.centerXAnchor.constraint(equalTo: centerXAnchor),
+            month.widthAnchor.constraint(equalToConstant: 40),
+            month.heightAnchor.constraint(equalToConstant: 12),
+            month.bottomAnchor.constraint(equalTo: bottomAnchor),
         ] + dayButtons.dropFirst().map { $0.widthAnchor.constraint(equalTo: dayButtons[0].widthAnchor) }
-          + dayButtons.map { $0.heightAnchor.constraint(equalTo: stack.heightAnchor) })
+          + dayButtons.map { $0.heightAnchor.constraint(equalTo: row.heightAnchor) })
         setAccessibilityLabel("이번 주 날짜")
     }
 
     required init?(coder: NSCoder) { nil }
 
-    func show(selected: Date, today: Date, daysWithContent: Set<String>) {
+    func show(selected: Date, today: Date, taskCounts: [String: TaskCount]) {
         self.selected = selected
         days = DailyNote.week(containing: selected)
-        let todayKey = DailyNote.dayKey(for: today)
-        let selectedKey = DailyNote.dayKey(for: selected)
         let weekdayNames = ["월", "화", "수", "목", "금", "토", "일"]
         for (index, button) in dayButtons.enumerated() {
-            let key = DailyNote.dayKey(for: days[index])
-            button.weekdayText = weekdayNames[index]
-            button.dayText = String(Calendar.current.component(.day, from: days[index]))
-            button.isToday = key == todayKey
-            button.isSelectedDay = key == selectedKey
-            button.hasContent = daysWithContent.contains(key)
-            let title = DailyNote.title(for: days[index])
-            button.setAccessibilityLabel(title)
-            button.toolTip = title
-            button.needsDisplay = true
+            button.configure(
+                day: days[index],
+                weekday: weekdayNames[index],
+                selected: selected,
+                today: today,
+                taskCount: taskCounts[DailyNote.dayKey(for: days[index])],
+                outsideMonth: false
+            )
         }
     }
 
@@ -121,11 +167,136 @@ final class WeekStripView: NSView {
 
     @objc private func showPreviousWeek() { stepWeek(by: -7) }
     @objc private func showNextWeek() { stepWeek(by: 7) }
+    @objc private func showMonth() { onShowMonth?() }
 
     private func stepWeek(by days: Int) {
         guard let target = Calendar.current.date(byAdding: .day, value: days, to: selected) else {
             preconditionFailure("Gregorian day arithmetic always succeeds")
         }
         onSelectDay?(target)
+    }
+}
+
+/// The month grid that replaces the week and the page while it is open. The arrows page
+/// through months without changing the selected day; choosing a day selects it and closes.
+final class MonthCalendarView: NSView {
+    var onSelectDay: ((Date) -> Void)?
+    var onClose: (() -> Void)?
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let dayButtons: [DayButton] = (0..<42).map { _ in DayButton(title: "", target: nil, action: nil) }
+    private var days: [Date] = []
+    private var displayedMonth = Date()
+    private var selected = Date()
+    private var today = Date()
+    private var taskCounts: [String: TaskCount] = [:]
+
+    init(accentColor: NSColor) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        setAccessibilityLabel("월 달력")
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = NSColor(calibratedWhite: 0.82, alpha: 1)
+        titleLabel.alignment = .center
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        let previous = chevronButton(symbol: "chevron.left", label: "지난달", target: self, action: #selector(showPreviousMonth))
+        let next = chevronButton(symbol: "chevron.right", label: "다음 달", target: self, action: #selector(showNextMonth))
+        let close = chevronButton(symbol: "chevron.compact.up", label: "주 보기로 돌아가기", target: self, action: #selector(close))
+        let header = NSStackView(views: [previous, titleLabel, next])
+        header.orientation = .horizontal
+        header.spacing = 12
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        let weekdays = NSStackView(views: ["월", "화", "수", "목", "금", "토", "일"].map { name in
+            let label = NSTextField(labelWithString: name)
+            label.font = .systemFont(ofSize: 10, weight: .medium)
+            label.textColor = NSColor(calibratedWhite: 0.42, alpha: 1)
+            label.alignment = .center
+            return label
+        })
+        weekdays.orientation = .horizontal
+        weekdays.distribution = .fillEqually
+        weekdays.translatesAutoresizingMaskIntoConstraints = false
+
+        let rows = stride(from: 0, to: 42, by: 7).map { start -> NSStackView in
+            let row = NSStackView(views: Array(dayButtons[start..<start + 7]))
+            row.orientation = .horizontal
+            row.distribution = .fillEqually
+            row.spacing = 0
+            return row
+        }
+        let grid = NSStackView(views: rows)
+        grid.orientation = .vertical
+        grid.distribution = .fillEqually
+        grid.spacing = 0
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        for (index, button) in dayButtons.enumerated() {
+            button.isBordered = false
+            button.tag = index
+            button.target = self
+            button.action = #selector(selectDay(_:))
+            button.accentColor = accentColor
+        }
+        for subview in [header, close, weekdays, grid] { addSubview(subview) }
+        NSLayoutConstraint.activate(rows.flatMap { row in
+            [row.widthAnchor.constraint(equalTo: grid.widthAnchor)]
+                + row.arrangedSubviews.map { $0.heightAnchor.constraint(equalTo: row.heightAnchor) }
+        })
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+            header.centerXAnchor.constraint(equalTo: centerXAnchor),
+            header.heightAnchor.constraint(equalToConstant: 22),
+            weekdays.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
+            weekdays.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            weekdays.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
+            weekdays.heightAnchor.constraint(equalToConstant: 14),
+            grid.topAnchor.constraint(equalTo: weekdays.bottomAnchor, constant: 2),
+            grid.leadingAnchor.constraint(equalTo: weekdays.leadingAnchor),
+            grid.trailingAnchor.constraint(equalTo: weekdays.trailingAnchor),
+            grid.bottomAnchor.constraint(equalTo: close.topAnchor),
+            close.centerXAnchor.constraint(equalTo: centerXAnchor),
+            close.widthAnchor.constraint(equalToConstant: 40),
+            close.heightAnchor.constraint(equalToConstant: 12),
+            close.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func show(selected: Date, today: Date, taskCounts: [String: TaskCount]) {
+        self.selected = selected
+        self.today = today
+        self.taskCounts = taskCounts
+        displayedMonth = selected
+        render()
+    }
+
+    private func render() {
+        let calendar = Calendar.current
+        days = DailyNote.monthGrid(containing: displayedMonth)
+        let month = calendar.component(.month, from: displayedMonth)
+        titleLabel.stringValue = "\(calendar.component(.year, from: displayedMonth))년 \(month)월"
+        for (index, button) in dayButtons.enumerated() {
+            button.configure(
+                day: days[index],
+                weekday: nil,
+                selected: selected,
+                today: today,
+                taskCount: taskCounts[DailyNote.dayKey(for: days[index])],
+                outsideMonth: calendar.component(.month, from: days[index]) != month
+            )
+        }
+    }
+
+    @objc private func selectDay(_ sender: DayButton) { onSelectDay?(days[sender.tag]) }
+    @objc private func close() { onClose?() }
+    @objc private func showPreviousMonth() { stepMonth(by: -1) }
+    @objc private func showNextMonth() { stepMonth(by: 1) }
+
+    private func stepMonth(by months: Int) {
+        guard let target = Calendar.current.date(byAdding: .month, value: months, to: displayedMonth) else {
+            preconditionFailure("Gregorian month arithmetic always succeeds")
+        }
+        displayedMonth = target
+        render()
     }
 }

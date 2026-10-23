@@ -81,7 +81,9 @@ final class RichTextView: NSTextView {
             preconditionFailure("RichTextView must be installed in an NSScrollView")
         }
         scrollView.layoutSubtreeIfNeeded()
-        let viewport = scrollView.contentSize
+        // The clip view's bounds are the visible document area, which shrinks as the scroll
+        // view magnifies; wrapping to it keeps a zoomed note inside the window's width.
+        let viewport = scrollView.contentView.bounds.size
         let previousOrigin = scrollView.contentView.bounds.origin
         minSize = NSSize(width: 0, height: viewport.height)
         maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)

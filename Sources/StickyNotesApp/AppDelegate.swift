@@ -189,6 +189,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         noteMenu.items.last?.keyEquivalentModifierMask = [.command, .shift]
         for item in noteMenu.items { item.target = controller }
         noteItem.submenu = noteMenu
+
+        let viewItem = NSMenuItem()
+        main.addItem(viewItem)
+        let viewMenu = NSMenu(title: "보기")
+        viewMenu.addItem(withTitle: "확대", action: #selector(StickyPanelController.zoomIn), keyEquivalent: "=")
+        // ⌘+ is ⌘⇧= on most layouts; a hidden twin answers it without a second visible row.
+        let zoomInWithPlus = NSMenuItem(title: "확대", action: #selector(StickyPanelController.zoomIn), keyEquivalent: "+")
+        zoomInWithPlus.isHidden = true
+        zoomInWithPlus.allowsKeyEquivalentWhenHidden = true
+        viewMenu.addItem(zoomInWithPlus)
+        viewMenu.addItem(withTitle: "축소", action: #selector(StickyPanelController.zoomOut), keyEquivalent: "-")
+        viewMenu.addItem(withTitle: "실제 크기", action: #selector(StickyPanelController.resetZoom), keyEquivalent: "0")
+        viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "월 달력 보기", action: #selector(StickyPanelController.showMonthCalendar), keyEquivalent: "k")
+        viewMenu.items.last?.keyEquivalentModifierMask = [.command, .shift]
+        for item in viewMenu.items { item.target = controller }
+        viewItem.submenu = viewMenu
         return main
     }
 

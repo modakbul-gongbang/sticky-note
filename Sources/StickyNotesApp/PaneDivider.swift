@@ -7,6 +7,10 @@ final class PaneDivider: NSView {
     var onDrag: ((CGFloat) -> Void)?
     private var dragStartY: CGFloat?
 
+    /// The panel moves when its background is dragged; the divider is the one strip of
+    /// background whose drag means "resize", so it opts out.
+    override var mouseDownCanMoveWindow: Bool { false }
+
     override func draw(_ dirtyRect: NSRect) {
         NSColor(calibratedWhite: 0.17, alpha: 1).setFill()
         NSRect(x: 16, y: bounds.midY - 0.5, width: bounds.width - 32, height: 1).fill()

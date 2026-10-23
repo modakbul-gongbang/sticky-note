@@ -40,6 +40,11 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private let todayPane = NSView()
     private let paneDivider = PaneDivider()
     private lazy var weekStrip = WeekStripView(accentColor: accentColor)
+    private lazy var monthCalendar = MonthCalendarView(accentColor: accentColor)
+    /// Height the month grid needs; while it is open the pane grows to at least this much
+    /// and returns to the user's own height when it closes.
+    private let monthCalendarHeight: CGFloat = 300
+    private let zoomSteps: [CGFloat] = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6]
     private lazy var todayPaneHeight = todayPane.heightAnchor.constraint(equalToConstant: storedTodayPaneHeight)
     private lazy var dividerHeight = paneDivider.heightAnchor.constraint(equalToConstant: dividerThickness)
     private let dividerThickness: CGFloat = 11
@@ -134,6 +139,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     func openToday(now: Date = Date()) {
         setTodayPaneCollapsed(false)
+        setMonthCalendarShown(false)
         if DailyNote.dayKey(for: selectedDay) != DailyNote.dayKey(for: now) {
             selectDay(now)
         }
@@ -375,7 +381,9 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
     func windowDidResize(_ notification: Notification) {
         if !todayPane.isHidden {
-            todayPaneHeight.constant = clampedTodayPaneHeight(todayPaneHeight.constant)
+            todayPaneHeight.constant = clampedTodayPaneHeight(
+                monthCalendar.isHidden ? storedTodayPaneHeight : max(storedTodayPaneHeight, monthCalendarHeight)
+            )
         }
         relayoutEditors()
         rememberCurrentFrame()
@@ -548,6 +556,12 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             errorLabel.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -180),
         ])
         setTodayPaneCollapsed(UserDefaults.standard.bool(forKey: "todayPane.collapsed"))
+        for scroll in [editorScroll, dailyScroll] {
+            scroll.allowsMagnification = false
+            scroll.minMagnification = zoomSteps[0]
+            scroll.maxMagnification = zoomSteps[zoomSteps.count - 1]
+            scroll.magnification = zoom
+        }
         root.layoutSubtreeIfNeeded()
         editor.layoutForScrollableViewport()
         dailyEditor.layoutForScrollableViewport()
@@ -596,8 +610,18 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             self?.selectDay(day)
             self?.panel.makeFirstResponder(self?.dailyEditor)
         }
+        weekStrip.onShowMonth = { [weak self] in self?.setMonthCalendarShown(true) }
+        monthCalendar.onClose = { [weak self] in self?.setMonthCalendarShown(false) }
+        monthCalendar.onSelectDay = { [weak self] day in
+            guard let self else { return }
+            setMonthCalendarShown(false)
+            selectDay(day)
+            panel.makeFirstResponder(dailyEditor)
+        }
+        monthCalendar.isHidden = true
         todayPane.addSubview(weekStrip)
         todayPane.addSubview(dailyScroll)
+        todayPane.addSubview(monthCalendar)
         paneDivider.translatesAutoresizingMaskIntoConstraints = false
         paneDivider.setAccessibilityLabel("오늘 할 일 높이 조절")
         paneDivider.onDragBegan = { [weak self] in
@@ -616,7 +640,51 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             dailyScroll.leadingAnchor.constraint(equalTo: todayPane.leadingAnchor),
             dailyScroll.trailingAnchor.constraint(equalTo: todayPane.trailingAnchor),
             dailyScroll.bottomAnchor.constraint(equalTo: todayPane.bottomAnchor),
+            monthCalendar.topAnchor.constraint(equalTo: todayPane.topAnchor, constant: 2),
+            monthCalendar.leadingAnchor.constraint(equalTo: todayPane.leadingAnchor, constant: 12),
+            monthCalendar.trailingAnchor.constraint(equalTo: todayPane.trailingAnchor, constant: -12),
+            monthCalendar.bottomAnchor.constraint(equalTo: todayPane.bottomAnchor, constant: -4),
         ])
+    }
+
+    func setMonthCalendarShown(_ shown: Bool) {
+        if shown {
+            setTodayPaneCollapsed(false)
+            monthCalendar.show(selected: selectedDay, today: Date(), taskCounts: repository.dailyTaskCounts())
+            todayPaneHeight.constant = clampedTodayPaneHeight(max(storedTodayPaneHeight, monthCalendarHeight))
+        } else if !todayPane.isHidden {
+            todayPaneHeight.constant = clampedTodayPaneHeight(storedTodayPaneHeight)
+        }
+        monthCalendar.isHidden = !shown
+        weekStrip.isHidden = shown
+        dailyScroll.isHidden = shown
+        relayoutEditors()
+    }
+
+    @objc func showMonthCalendar() { setMonthCalendarShown(monthCalendar.isHidden) }
+
+    @objc func zoomIn() { stepZoom(by: 1) }
+    @objc func zoomOut() { stepZoom(by: -1) }
+    @objc func resetZoom() { applyZoom(1) }
+
+    var zoom: CGFloat {
+        let stored = UserDefaults.standard.double(forKey: "editor.zoom")
+        return stored > 0 ? stored : 1
+    }
+
+    private func stepZoom(by step: Int) {
+        let current = zoomSteps.enumerated().min { abs($0.element - zoom) < abs($1.element - zoom) }?.offset ?? 2
+        applyZoom(zoomSteps[min(max(current + step, 0), zoomSteps.count - 1)])
+    }
+
+    /// Zoom magnifies both editors' scroll views rather than rewriting font sizes, so a
+    /// note's stored formatting never depends on how large it was read.
+    private func applyZoom(_ value: CGFloat) {
+        UserDefaults.standard.set(Double(value), forKey: "editor.zoom")
+        for scroll in [editor.enclosingScrollView, dailyEditor.enclosingScrollView].compactMap({ $0 }) {
+            scroll.magnification = value
+        }
+        relayoutEditors()
     }
 
     private var storedTodayPaneHeight: CGFloat {
@@ -625,6 +693,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     private func setTodayPaneCollapsed(_ collapsed: Bool) {
+        if collapsed, !monthCalendar.isHidden { setMonthCalendarShown(false) }
         todayPane.isHidden = collapsed
         paneDivider.isHidden = collapsed
         todayPaneHeight.constant = collapsed ? 0 : clampedTodayPaneHeight(storedTodayPaneHeight)
@@ -637,7 +706,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     private func setTodayPaneHeight(_ height: CGFloat) {
-        guard !todayPane.isHidden else { return }
+        guard !todayPane.isHidden, monthCalendar.isHidden else { return }
         let clamped = clampedTodayPaneHeight(height)
         todayPaneHeight.constant = clamped
         UserDefaults.standard.set(Double(clamped), forKey: "todayPane.height")
@@ -1285,11 +1354,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     private func refreshWeekStrip() {
-        weekStrip.show(
-            selected: selectedDay,
-            today: Date(),
-            daysWithContent: repository.daysWithDailyNotes()
-        )
+        weekStrip.show(selected: selectedDay, today: Date(), taskCounts: repository.dailyTaskCounts())
     }
 
     private func followDayRollover(now: Date) {
