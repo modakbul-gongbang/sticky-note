@@ -40,7 +40,7 @@ public final class NoteRepository {
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
 
         return metadata
-            .filter { $0.isTrashed == includeTrashed }
+            .filter { $0.isTrashed == includeTrashed && $0.dailyDay == nil }
             .filter { note in
                 guard !normalizedQuery.isEmpty else { return true }
                 let haystack = "\(note.title)\n\(note.searchText)"
@@ -50,10 +50,16 @@ public final class NoteRepository {
             .sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
-    /// Today's page is the newest live note keyed to that day; a trashed page does not count,
-    /// so opening the day again starts a fresh one.
+    /// Daily pages live apart from the note list: `list` never returns them, and a day finds
+    /// its own page here.
     public func dailyNote(day: String) -> NoteMetadata? {
-        list().first { $0.dailyDay == day }
+        metadata
+            .filter { $0.dailyDay == day && !$0.isTrashed }
+            .max { $0.modifiedAt < $1.modifiedAt }
+    }
+
+    public func daysWithDailyNotes() -> Set<String> {
+        Set(metadata.filter { !$0.isTrashed }.compactMap(\.dailyDay))
     }
 
     public func load(id: UUID) throws -> StoredNote {

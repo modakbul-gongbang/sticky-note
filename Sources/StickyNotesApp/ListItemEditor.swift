@@ -240,6 +240,20 @@ final class ListItemEditor: NSObject {
         return normalized
     }
 
+    /// Builds pasted Markdown lines with the same stored shape a typed list has - prefix text
+    /// plus a paragraph indent per level - then lets normalization style it.
+    func content(from lines: [PastedLine]) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        for (index, line) in lines.enumerated() {
+            let text = (line.kind?.prefix ?? "") + line.text + (index < lines.count - 1 ? "\n" : "")
+            result.append(NSAttributedString(string: text, attributes: [
+                .font: NSFont.systemFont(ofSize: 17, weight: line.isHeading ? .bold : .regular),
+                .paragraphStyle: paragraphStyle(level: line.level, kind: line.kind),
+            ]))
+        }
+        return normalizedContent(result)
+    }
+
     func prepareForDrawing() {
         refreshTemporaryAttributes()
     }

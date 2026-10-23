@@ -74,6 +74,21 @@ public enum NoteContent {
         return !hasText && !hasAttachment
     }
 
+    /// True when every line is blank or a list marker with nothing after it - a page that
+    /// holds only the empty checkbox it was opened with.
+    public static func isBlankList(_ content: NSAttributedString) -> Bool {
+        guard isEmpty(content) == false else { return true }
+        var hasAttachment = false
+        content.enumerateAttribute(.attachment, in: NSRange(location: 0, length: content.length)) { value, _, stop in
+            if value != nil { hasAttachment = true; stop.pointee = true }
+        }
+        guard !hasAttachment else { return false }
+        return content.string.components(separatedBy: .newlines).allSatisfy { line in
+            let body = ListItemSyntax.match(in: line).map { String(line.utf16.dropFirst($0.prefixLength)) ?? "" } ?? line
+            return body.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+    }
+
     public static func title(from content: NSAttributedString) -> String {
         let firstLine = content.string
             .components(separatedBy: .newlines)
@@ -92,6 +107,22 @@ public enum DailyNote {
             preconditionFailure("Gregorian date components are always present")
         }
         return String(format: "%04d-%02d-%02d", year, month, day)
+    }
+
+    /// The Monday-to-Sunday week holding `date`, the same span as an ISO weekly note.
+    public static func week(containing date: Date, calendar: Calendar = .current) -> [Date] {
+        let day = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: day)
+        let offsetFromMonday = (weekday + 5) % 7
+        guard let monday = calendar.date(byAdding: .day, value: -offsetFromMonday, to: day) else {
+            preconditionFailure("Gregorian day arithmetic always succeeds")
+        }
+        return (0..<7).map { offset in
+            guard let date = calendar.date(byAdding: .day, value: offset, to: monday) else {
+                preconditionFailure("Gregorian day arithmetic always succeeds")
+            }
+            return date
+        }
     }
 
     public static func title(for date: Date, calendar: Calendar = .current) -> String {

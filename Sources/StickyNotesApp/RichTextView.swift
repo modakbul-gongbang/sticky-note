@@ -4,6 +4,7 @@ import StickyNotesCore
 final class RichTextView: NSTextView {
     var onAttachmentDoubleClick: ((NSImage) -> Void)?
     var onLinkClick: ((URL) -> Void)?
+    var onBecomeFirstResponder: (() -> Void)?
     private let editorUndoManager = UndoManager()
     private let ownedTextStorage: NSTextStorage?
     private let ownedLayoutManager: NSLayoutManager?
@@ -125,6 +126,10 @@ final class RichTextView: NSTextView {
         let pasteboard = NSPasteboard.general
         if let image = NSImage(pasteboard: pasteboard) {
             insertImage(image)
+            return
+        }
+        if let value = pasteboard.string(forType: .string), let lines = MarkdownPaste.lines(from: value) {
+            insertMarkdownPaste(lines)
             return
         }
         if let type = pasteboard.availableType(from: [.rtfd, .rtf, .html]),
@@ -472,6 +477,39 @@ final class RichTextView: NSTextView {
             options[.characterEncoding] = String.Encoding.utf8.rawValue
         }
         return options
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { onBecomeFirstResponder?() }
+        return accepted
+    }
+
+    /// Pasted lines are whole paragraphs: on an empty line, or an empty list row such as a fresh
+    /// checkbox, they replace it; anywhere else they start on a line of their own.
+    func insertMarkdownPaste(_ lines: [PastedLine]) {
+        guard !lines.isEmpty else { return }
+        let content = NSMutableAttributedString(attributedString: listItemEditor.content(from: lines))
+        let source = string as NSString
+        var target = selectedRange()
+        let paragraph = source.paragraphRange(for: NSRange(location: target.location, length: 0))
+        let lineEnd = NSMaxRange(paragraph) > paragraph.location
+            && source.character(at: NSMaxRange(paragraph) - 1) == 10
+            ? NSMaxRange(paragraph) - 1
+            : NSMaxRange(paragraph)
+        let line = source.substring(with: NSRange(location: paragraph.location, length: lineEnd - paragraph.location))
+        let lineIsBlank = line.trimmingCharacters(in: .whitespaces).isEmpty
+            || ListItemSyntax.plainTextAfterRemovingPrefix(
+                from: line,
+                caretOffset: ListItemSyntax.match(in: line)?.prefixLength ?? -1
+            )?.trimmingCharacters(in: .whitespaces).isEmpty == true
+        if target.length == 0, lineIsBlank {
+            target = NSRange(location: paragraph.location, length: lineEnd - paragraph.location)
+        } else if target.location > paragraph.location {
+            content.insert(NSAttributedString(string: "\n", attributes: typingAttributes), at: 0)
+        }
+        super.insertText(content, replacementRange: target)
+        detectURLs()
     }
 
     private func insertNormalizedPaste(_ source: NSAttributedString) {

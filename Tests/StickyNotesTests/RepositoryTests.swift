@@ -182,10 +182,58 @@ import Testing
         let reopened = try NoteRepository(rootURL: root)
         #expect(reopened.dailyNote(day: "2026-10-23")?.id == id)
         #expect(reopened.dailyNote(day: "2026-10-24") == nil)
-        #expect(reopened.list().filter { $0.dailyDay != nil }.count == 1)
+        #expect(reopened.list().map(\.title) == ["일반 노트"])
+        #expect(reopened.daysWithDailyNotes() == ["2026-10-23"])
 
         try reopened.moveToTrash(id: id)
         #expect(reopened.dailyNote(day: "2026-10-23") == nil)
+    }
+
+    @Test func weekRunsMondayToSundayAroundTheDay() throws {
+        var seoul = Calendar(identifier: .gregorian)
+        seoul.timeZone = try #require(TimeZone(identifier: "Asia/Seoul"))
+        let sunday = try #require(ISO8601DateFormatter().date(from: "2026-10-25T03:00:00Z"))
+        let week = DailyNote.week(containing: sunday, calendar: seoul).map { DailyNote.dayKey(for: $0, calendar: seoul) }
+        #expect(week == ["2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23", "2026-10-24", "2026-10-25"])
+    }
+
+    @Test func pageHoldingOnlyEmptyCheckboxesCountsAsBlank() {
+        #expect(NoteContent.isBlankList(NSAttributedString(string: "☐\t\n☐\t  \n")))
+        #expect(!NoteContent.isBlankList(NSAttributedString(string: "☐\t\n☐\t장보기")))
+        #expect(!NoteContent.isBlankList(NSAttributedString(string: "메모")))
+    }
+
+    @Test func obsidianDaySectionBecomesHeadingsAndNestedTasks() throws {
+        let section = """
+        #### Core Tasks
+        - [ ] Atorni 계획 세우기\u{20}
+        \t- [ ]\u{20}
+        - [ ] Hide 런칭하고 글 써보기\u{20}
+        - [x] 투표 모니터링
+        \t- [ ] 결과 공유
+        \t\t\t- [ ] 너무 깊은 하위
+
+        #### Satellite Tasks
+        - [ ]\u{20}
+
+        #### Memo
+        Atorni\u{20}
+        - 메모 한 줄
+        """
+        let lines = try #require(MarkdownPaste.lines(from: section))
+        #expect(lines == [
+            PastedLine(text: "Core Tasks", kind: nil, level: 0, isHeading: true),
+            PastedLine(text: "Atorni 계획 세우기", kind: .uncheckedChecklist, level: 0, isHeading: false),
+            PastedLine(text: "Hide 런칭하고 글 써보기", kind: .uncheckedChecklist, level: 0, isHeading: false),
+            PastedLine(text: "투표 모니터링", kind: .checkedChecklist, level: 0, isHeading: false),
+            PastedLine(text: "결과 공유", kind: .uncheckedChecklist, level: 1, isHeading: false),
+            PastedLine(text: "너무 깊은 하위", kind: .uncheckedChecklist, level: 2, isHeading: false),
+            PastedLine(text: "Satellite Tasks", kind: nil, level: 0, isHeading: true),
+            PastedLine(text: "Memo", kind: nil, level: 0, isHeading: true),
+            PastedLine(text: "Atorni", kind: nil, level: 0, isHeading: false),
+            PastedLine(text: "메모 한 줄", kind: .bullet, level: 0, isHeading: false),
+        ])
+        #expect(MarkdownPaste.lines(from: "그냥 한 줄\n두 번째 줄") == nil)
     }
 
     @Test func indexWrittenBeforeDailyPagesStillLoads() throws {

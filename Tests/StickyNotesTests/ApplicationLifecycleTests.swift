@@ -601,7 +601,7 @@ import Testing
         #expect(longTitleBox.maxX <= newBox.minX)
     }
 
-    @Test func todayPageStartsAsAnUnsavedTemplateAndReopensAfterTheFirstEdit() throws {
+    @Test func dayPageStartsUntouchedAndIsKeptApartFromTheNoteList() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -611,35 +611,33 @@ import Testing
         try repository.save(id: UUID(), content: NSAttributedString(string: "일반 노트"))
         let controller = StickyPanelController(repository: repository)
         let contentView = try #require(controller.window?.contentView)
-        let editor = try #require(recursiveSubviews(of: contentView).compactMap { $0 as? RichTextView }.first)
+        let editors = recursiveSubviews(of: contentView).compactMap { $0 as? RichTextView }
+        let noteEditor = try #require(editors.first { $0.accessibilityLabel() == "노트 편집기" })
+        let dayEditor = try #require(editors.first { $0.accessibilityLabel() == "오늘 할 일 편집기" })
         let friday = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 23, hour: 9)))
         let saturday = try #require(Calendar.current.date(byAdding: .day, value: 1, to: friday))
 
-        controller.openToday(now: friday)
-        #expect(editor.string == "10월 23일 (금)\n☐\t")
-        #expect(editor.selectedRange().location == editor.string.utf16.count)
+        controller.selectDay(friday)
+        #expect(dayEditor.string == "☐\t")
+        #expect(noteEditor.string == "일반 노트")
         controller.hidePanel()
+        #expect(repository.daysWithDailyNotes().isEmpty)
+
+        dayEditor.setSelectedRange(NSRange(location: dayEditor.string.utf16.count, length: 0))
+        dayEditor.insertText("장보기", replacementRange: NSRange(location: NSNotFound, length: 0))
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: dayEditor))
+        controller.hidePanel()
+        #expect(repository.daysWithDailyNotes() == ["2026-10-23"])
         #expect(repository.list().map(\.title) == ["일반 노트"])
+        #expect(noteEditor.string == "일반 노트")
 
-        editor.insertText("장보기", replacementRange: NSRange(location: NSNotFound, length: 0))
-        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
-        controller.hidePanel()
-        let page = try #require(repository.dailyNote(day: "2026-10-23"))
-        #expect(page.title == "10월 23일 (금)")
-
-        controller.newNote()
-        controller.openToday(now: friday)
-        #expect(editor.string == "10월 23일 (금)\n☐\t장보기")
-        #expect(repository.list().count == 2)
-
-        controller.openToday(now: saturday)
-        #expect(editor.string == "10월 24일 (토)\n☐\t")
-        controller.openToday(now: friday)
-        #expect(editor.string.hasSuffix("장보기"))
-        #expect(repository.list().count == 2)
+        controller.selectDay(saturday)
+        #expect(dayEditor.string == "☐\t")
+        controller.selectDay(friday)
+        #expect(dayEditor.string == "☐\t장보기")
     }
 
-    @Test func headerTodayButtonOpensTodaysPage() throws {
+    @Test func pastedObsidianTasksReplaceTheEmptyCheckbox() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -647,14 +645,57 @@ import Testing
 
         let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
         let contentView = try #require(controller.window?.contentView)
-        let descendants = recursiveSubviews(of: contentView)
-        let editor = try #require(descendants.compactMap { $0 as? RichTextView }.first)
-        let todayButton = try #require(descendants.compactMap { $0 as? NSButton }.first {
-            $0.accessibilityLabel() == "오늘 할 일"
+        let dayEditor = try #require(recursiveSubviews(of: contentView).compactMap { $0 as? RichTextView }.first {
+            $0.accessibilityLabel() == "오늘 할 일 편집기"
         })
+        let pasted = try #require(MarkdownPaste.lines(from: "#### Core Tasks\n- [ ] Hide 런칭하기\n\t- [x] 글 써보기\n- [ ] "))
 
-        _ = todayButton.target?.perform(todayButton.action, with: todayButton)
-        #expect(editor.string == DailyNote.title(for: Date()) + "\n☐\t")
+        dayEditor.setSelectedRange(NSRange(location: dayEditor.string.utf16.count, length: 0))
+        dayEditor.insertMarkdownPaste(pasted)
+        #expect(dayEditor.string == "Core Tasks\n☐\tHide 런칭하기\n☑\t글 써보기")
+        let headingFont = try #require(dayEditor.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        #expect(NSFontManager.shared.traits(of: headingFont).contains(.boldFontMask))
+        let childStyle = dayEditor.textStorage?.attribute(
+            .paragraphStyle,
+            at: (dayEditor.string as NSString).range(of: "☑").location,
+            effectiveRange: nil
+        ) as? NSParagraphStyle
+        #expect((childStyle?.firstLineHeadIndent ?? 0) > 0)
+    }
+
+    @Test func headerCalendarButtonCollapsesAndRestoresTheDayPane() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let wasCollapsed = UserDefaults.standard.object(forKey: "todayPane.collapsed")
+        defer { UserDefaults.standard.set(wasCollapsed, forKey: "todayPane.collapsed") }
+
+        let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
+        let contentView = try #require(controller.window?.contentView)
+        let descendants = recursiveSubviews(of: contentView)
+        let toggle = try #require(descendants.compactMap { $0 as? NSButton }.first {
+            $0.accessibilityLabel() == "오늘 할 일 펼치기 또는 접기"
+        })
+        let pane = try #require(descendants.first { $0.accessibilityLabel() == "오늘 할 일" })
+        let noteScroll = try #require(descendants.compactMap { $0 as? RichTextView }.first {
+            $0.accessibilityLabel() == "노트 편집기"
+        }?.enclosingScrollView)
+
+        controller.openToday()
+        contentView.layoutSubtreeIfNeeded()
+        #expect(!pane.isHidden)
+        let sharedHeight = noteScroll.frame.height
+
+        _ = toggle.target?.perform(toggle.action, with: toggle)
+        contentView.layoutSubtreeIfNeeded()
+        #expect(pane.isHidden)
+        #expect(noteScroll.frame.height > sharedHeight)
+
+        _ = toggle.target?.perform(toggle.action, with: toggle)
+        contentView.layoutSubtreeIfNeeded()
+        #expect(!pane.isHidden)
+        #expect(noteScroll.frame.height == sharedHeight)
     }
 
     private func recursiveSubviews(of view: NSView) -> [NSView] {

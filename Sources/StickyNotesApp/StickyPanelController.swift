@@ -35,11 +35,28 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private let emptyTrashButton = NSButton(title: "휴지통 비우기", target: nil, action: nil)
     private let accentColor = NSColor(calibratedRed: 0.88, green: 0.27, blue: 0.23, alpha: 1)
     private var currentID = UUID()
-    /// The day whose to-do page the editor holds, nil for an ordinary note.
-    private var currentDailyDay: String?
-    /// True while today's page is still the untouched date-and-checkbox template: it is not
-    /// saved until the first edit, so opening the day without writing leaves no empty page.
+    private let dailyEditor = RichTextView()
+    private let dailyScroll = NSScrollView()
+    private let todayPane = NSView()
+    private let paneDivider = PaneDivider()
+    private lazy var weekStrip = WeekStripView(accentColor: accentColor)
+    private lazy var todayPaneHeight = todayPane.heightAnchor.constraint(equalToConstant: storedTodayPaneHeight)
+    private lazy var dividerHeight = paneDivider.heightAnchor.constraint(equalToConstant: dividerThickness)
+    private let dividerThickness: CGFloat = 11
+    private let minimumTodayPaneHeight: CGFloat = 112
+    private let minimumNoteHeight: CGFloat = 150
+    private var dragStartTodayPaneHeight: CGFloat = 0
+    /// The day shown in the top pane, and the today it was chosen against: when the date rolls
+    /// over while "today" was showing, the next show moves on to the new day.
+    private var selectedDay = Date()
+    private var todayKeyAtLastRefresh = DailyNote.dayKey(for: Date())
+    private var dailyID = UUID()
+    /// True while the day's page is still the untouched empty checkbox: it is not saved until
+    /// the first edit, so looking at a day leaves no empty page behind.
     private var dailyTemplateIsUntouched = false
+    private var dailyAutosaveTimer: Timer?
+    private weak var lastFocusedEditor: RichTextView?
+    private weak var todayToggleButton: NSButton?
     private var rows: [NoteMetadata] = []
     private var autosaveTimer: Timer?
     private var errorTimer: Timer?
@@ -86,11 +103,12 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     func showOnCurrentScreen() {
         guard let screen = screenUnderMouse() ?? NSScreen.main else { return }
         closeOverlays(focusEditor: false)
+        followDayRollover(now: Date())
         let remembered = rememberedFrame(for: screen)
         panel.setFrame(WindowPlacement.frame(remembered: remembered, visibleFrame: screen.visibleFrame), display: true)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        panel.makeFirstResponder(editor)
+        panel.makeFirstResponder(activeEditor)
     }
 
     func toggleOnCurrentScreen() {
@@ -101,53 +119,44 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         }
     }
 
-    /// The today shortcut mirrors Option+`: pressed on today's page it hides the panel,
-    /// anywhere else it brings the panel up on today's page.
+    /// The today shortcut mirrors Option+`: pressed while writing on today's page it hides the
+    /// panel, anywhere else it brings the panel up with the cursor on today's page.
     func toggleTodayOnCurrentScreen(now: Date = Date()) {
-        if panel.isVisible && panel.isKeyWindow && currentDailyDay == DailyNote.dayKey(for: now) {
+        if panel.isVisible, panel.isKeyWindow, !todayPane.isHidden,
+           lastFocusedEditor === dailyEditor,
+           DailyNote.dayKey(for: selectedDay) == DailyNote.dayKey(for: now) {
             hidePanel()
-        } else {
-            showOnCurrentScreen()
-            openToday(now: now)
-        }
-    }
-
-    @objc func openTodayFromButton() {
-        openToday(now: Date())
-    }
-
-    func openToday(now: Date) {
-        let day = DailyNote.dayKey(for: now)
-        saveNow()
-        noteCycle.removeAll()
-        showingTrash = false
-        scopeControl.selectedSegment = 0
-        closeOverlays()
-        if let existing = repository.dailyNote(day: day) {
-            loadNote(id: existing.id)
             return
         }
-        guard currentDailyDay != day else { return }
-        setCurrentNote(UUID(), dailyDay: day)
-        resetTypingAttributes()
-        replaceEditorContent(with: NSAttributedString(
-            string: DailyNote.title(for: now) + "\n",
-            attributes: editor.typingAttributes
-        ))
-        editor.isEditable = true
-        editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
-        suppressChanges = true
-        editor.insertListItem(.uncheckedChecklist)
-        editor.resetUndoHistory()
-        suppressChanges = false
-        dailyTemplateIsUntouched = true
-        reloadRows(selecting: nil)
-        panel.makeFirstResponder(editor)
+        showOnCurrentScreen()
+        openToday(now: now)
+    }
+
+    func openToday(now: Date = Date()) {
+        setTodayPaneCollapsed(false)
+        if DailyNote.dayKey(for: selectedDay) != DailyNote.dayKey(for: now) {
+            selectDay(now)
+        }
+        panel.makeFirstResponder(dailyEditor)
+        dailyEditor.setSelectedRange(NSRange(location: dailyEditor.string.utf16.count, length: 0))
+    }
+
+    @objc func toggleTodayPane() {
+        let collapsing = !todayPane.isHidden
+        setTodayPaneCollapsed(collapsing)
+        panel.makeFirstResponder(collapsing ? editor : dailyEditor)
+    }
+
+    func selectDay(_ date: Date) {
+        saveDaily()
+        selectedDay = date
+        loadDaily()
     }
 
     @objc func hidePanel() {
         closeOverlays(focusEditor: false)
         saveNow()
+        saveDaily()
         panel.orderOut(nil)
     }
 
@@ -156,7 +165,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         noteCycle.removeAll()
         showingTrash = false
         scopeControl.selectedSegment = 0
-        setCurrentNote(UUID())
+        currentID = UUID()
         replaceEditorContent(with: NSAttributedString())
         reloadRows(selecting: nil)
         editor.isEditable = true
@@ -245,59 +254,61 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     @objc func toggleBold() {
-        panel.makeFirstResponder(editor)
-        let selection = editor.selectedRange()
-        let baseFont = editor.typingAttributes[.font] as? NSFont ?? .systemFont(ofSize: 16)
+        let target = activeEditor
+        panel.makeFirstResponder(target)
+        let selection = target.selectedRange()
+        let baseFont = target.typingAttributes[.font] as? NSFont ?? .systemFont(ofSize: 16)
         let traits = NSFontManager.shared.traits(of: baseFont)
         let makeBold = !traits.contains(.boldFontMask)
         if selection.length == 0 {
-            editor.typingAttributes[.font] = makeBold
+            target.typingAttributes[.font] = makeBold
                 ? NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
                 : NSFontManager.shared.convert(baseFont, toNotHaveTrait: .boldFontMask)
         } else {
-            editAttributes(in: selection, actionName: "굵게") {
-                editor.requiredTextStorage.enumerateAttribute(.font, in: selection) { value, range, _ in
+            editAttributes(of: target, in: selection, actionName: "굵게") {
+                target.requiredTextStorage.enumerateAttribute(.font, in: selection) { value, range, _ in
                     let font = value as? NSFont ?? baseFont
                     let converted = makeBold
                         ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
                         : NSFontManager.shared.convert(font, toNotHaveTrait: .boldFontMask)
-                    editor.requiredTextStorage.addAttribute(.font, value: converted, range: range)
+                    target.requiredTextStorage.addAttribute(.font, value: converted, range: range)
                 }
             }
         }
     }
 
     @objc func toggleStrikethrough() {
-        panel.makeFirstResponder(editor)
-        let selection = editor.selectedRange()
-        let turningOn = !strikethroughIsActive(in: selection)
+        let target = activeEditor
+        panel.makeFirstResponder(target)
+        let selection = target.selectedRange()
+        let turningOn = !strikethroughIsActive(in: selection, of: target)
         guard selection.length > 0 else {
             if turningOn {
-                editor.typingAttributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                target.typingAttributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
             } else {
-                editor.typingAttributes.removeValue(forKey: .strikethroughStyle)
+                target.typingAttributes.removeValue(forKey: .strikethroughStyle)
             }
             return
         }
-        editAttributes(in: selection, actionName: "취소선") {
+        editAttributes(of: target, in: selection, actionName: "취소선") {
             if turningOn {
-                editor.requiredTextStorage.addAttribute(
+                target.requiredTextStorage.addAttribute(
                     .strikethroughStyle,
                     value: NSUnderlineStyle.single.rawValue,
                     range: selection
                 )
             } else {
-                editor.requiredTextStorage.removeAttribute(.strikethroughStyle, range: selection)
+                target.requiredTextStorage.removeAttribute(.strikethroughStyle, range: selection)
             }
         }
     }
 
-    private func strikethroughIsActive(in selection: NSRange) -> Bool {
+    private func strikethroughIsActive(in selection: NSRange, of target: RichTextView) -> Bool {
         let value: Any?
         if selection.length == 0 {
-            value = editor.typingAttributes[.strikethroughStyle]
+            value = target.typingAttributes[.strikethroughStyle]
         } else {
-            value = editor.requiredTextStorage.attribute(
+            value = target.requiredTextStorage.attribute(
                 .strikethroughStyle,
                 at: selection.location,
                 effectiveRange: nil
@@ -308,26 +319,29 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     /// An attribute-only edit still has to pass through the text view's change cycle, or the
     /// formatting command lands outside the undo stack and Cmd+Z skips over it.
-    private func editAttributes(in range: NSRange, actionName: String, mutation: () -> Void) {
-        guard editor.shouldChangeText(in: range, replacementString: nil) else { return }
+    private func editAttributes(of target: RichTextView, in range: NSRange, actionName: String, mutation: () -> Void) {
+        guard target.shouldChangeText(in: range, replacementString: nil) else { return }
         mutation()
-        editor.didChangeText()
-        editor.undoManager?.setActionName(actionName)
+        target.didChangeText()
+        target.undoManager?.setActionName(actionName)
     }
 
     @objc func toggleChecklistLine() {
-        panel.makeFirstResponder(editor)
-        editor.toggleChecklistOnCurrentLine()
+        let target = activeEditor
+        panel.makeFirstResponder(target)
+        target.toggleChecklistOnCurrentLine()
     }
 
     @objc func undoEditor() {
-        panel.makeFirstResponder(editor)
-        editor.undoManager?.undo()
+        let target = activeEditor
+        panel.makeFirstResponder(target)
+        target.undoManager?.undo()
     }
 
     @objc func redoEditor() {
-        panel.makeFirstResponder(editor)
-        editor.undoManager?.redo()
+        let target = activeEditor
+        panel.makeFirstResponder(target)
+        target.undoManager?.redo()
     }
 
     @objc func showPreviousNote() {
@@ -360,14 +374,24 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         closeOverlays(focusEditor: false)
     }
     func windowDidResize(_ notification: Notification) {
-        editor.layoutForScrollableViewport()
+        if !todayPane.isHidden {
+            todayPaneHeight.constant = clampedTodayPaneHeight(todayPaneHeight.constant)
+        }
+        relayoutEditors()
         rememberCurrentFrame()
     }
 
     func textDidChange(_ notification: Notification) {
         guard !suppressChanges else { return }
+        if (notification.object as? RichTextView) === dailyEditor {
+            dailyTemplateIsUntouched = false
+            dailyAutosaveTimer?.invalidate()
+            dailyAutosaveTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
+                self?.saveDaily()
+            }
+            return
+        }
         noteCycle.removeAll()
-        dailyTemplateIsUntouched = false
         autosaveTimer?.invalidate()
         updateTitle()
         updateWordCount()
@@ -458,38 +482,9 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         let header = makeHeader()
         let formatButton = makeFooterFormatButton()
         let editorScroll = NSScrollView()
-        editorScroll.translatesAutoresizingMaskIntoConstraints = false
-        editorScroll.drawsBackground = false
-        editorScroll.hasVerticalScroller = true
-        editorScroll.autohidesScrollers = true
-        editorScroll.documentView = editor
-
-        editor.isRichText = true
-        editor.importsGraphics = true
-        editor.allowsUndo = true
-        editor.linkTextAttributes = [
-            .foregroundColor: accentColor,
-            .underlineStyle: 0,
-        ]
-        editor.drawsBackground = true
-        editor.backgroundColor = NSColor(calibratedRed: 0.052, green: 0.055, blue: 0.062, alpha: 1)
-        editor.textColor = NSColor(calibratedWhite: 0.91, alpha: 1)
-        editor.insertionPointColor = NSColor(calibratedWhite: 0.95, alpha: 1)
-        editor.font = .systemFont(ofSize: 17)
-        editor.defaultParagraphStyle = editorParagraphStyle()
-        editor.typingAttributes = [
-            .font: NSFont.systemFont(ofSize: 17),
-            .foregroundColor: NSColor(calibratedWhite: 0.91, alpha: 1),
-            .paragraphStyle: editorParagraphStyle(),
-        ]
-        editor.textContainerInset = CGSize(width: 20, height: 18)
-        editor.isVerticallyResizable = true
-        editor.isHorizontallyResizable = false
-        editor.autoresizingMask = [.width]
-        editor.delegate = self
-        editor.setAccessibilityLabel("노트 편집기")
-        editor.onAttachmentDoubleClick = { [weak self] image in self?.showImagePreview(image) }
-        editor.checklistAccentColor = accentColor
+        configureEditor(editor, in: editorScroll, label: "노트 편집기", inset: CGSize(width: 20, height: 18))
+        configureEditor(dailyEditor, in: dailyScroll, label: "오늘 할 일 편집기", inset: CGSize(width: 20, height: 4))
+        configureTodayPane()
 
         configureSidebar()
         configureFormatOverlay()
@@ -497,6 +492,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         configureErrorLabel()
         configureWordCountLabel()
         root.addSubview(editorScroll)
+        root.addSubview(todayPane)
+        root.addSubview(paneDivider)
         root.addSubview(header)
         root.addSubview(sidebar)
         root.addSubview(formatOverlay)
@@ -515,7 +512,15 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             header.heightAnchor.constraint(equalToConstant: 34),
-            editorScroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
+            todayPane.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
+            todayPane.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            todayPane.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            todayPaneHeight,
+            paneDivider.topAnchor.constraint(equalTo: todayPane.bottomAnchor),
+            paneDivider.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            paneDivider.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            dividerHeight,
+            editorScroll.topAnchor.constraint(equalTo: paneDivider.bottomAnchor),
             editorScroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             editorScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             editorScroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -48),
@@ -542,9 +547,115 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             errorLabel.heightAnchor.constraint(equalToConstant: 26),
             errorLabel.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -180),
         ])
+        setTodayPaneCollapsed(UserDefaults.standard.bool(forKey: "todayPane.collapsed"))
         root.layoutSubtreeIfNeeded()
         editor.layoutForScrollableViewport()
+        dailyEditor.layoutForScrollableViewport()
         updateWordCount()
+        loadDaily()
+    }
+
+    private func configureEditor(_ target: RichTextView, in scroll: NSScrollView, label: String, inset: CGSize) {
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.documentView = target
+
+        target.isRichText = true
+        target.importsGraphics = true
+        target.allowsUndo = true
+        target.linkTextAttributes = [
+            .foregroundColor: accentColor,
+            .underlineStyle: 0,
+        ]
+        target.drawsBackground = true
+        target.backgroundColor = NSColor(calibratedRed: 0.052, green: 0.055, blue: 0.062, alpha: 1)
+        target.textColor = NSColor(calibratedWhite: 0.91, alpha: 1)
+        target.insertionPointColor = NSColor(calibratedWhite: 0.95, alpha: 1)
+        target.font = .systemFont(ofSize: 17)
+        target.defaultParagraphStyle = editorParagraphStyle()
+        target.typingAttributes = defaultTypingAttributes()
+        target.textContainerInset = inset
+        target.isVerticallyResizable = true
+        target.isHorizontallyResizable = false
+        target.autoresizingMask = [.width]
+        target.delegate = self
+        target.setAccessibilityLabel(label)
+        target.onAttachmentDoubleClick = { [weak self] image in self?.showImagePreview(image) }
+        target.onBecomeFirstResponder = { [weak self, weak target] in self?.lastFocusedEditor = target }
+        target.checklistAccentColor = accentColor
+    }
+
+    /// The top pane holds the week and the chosen day's tasks. Its height is the user's, kept
+    /// between launches; collapsing it gives the whole window back to the note.
+    private func configureTodayPane() {
+        todayPane.translatesAutoresizingMaskIntoConstraints = false
+        todayPane.setAccessibilityLabel("오늘 할 일")
+        weekStrip.onSelectDay = { [weak self] day in
+            self?.selectDay(day)
+            self?.panel.makeFirstResponder(self?.dailyEditor)
+        }
+        todayPane.addSubview(weekStrip)
+        todayPane.addSubview(dailyScroll)
+        paneDivider.translatesAutoresizingMaskIntoConstraints = false
+        paneDivider.setAccessibilityLabel("오늘 할 일 높이 조절")
+        paneDivider.onDragBegan = { [weak self] in
+            guard let self else { return }
+            dragStartTodayPaneHeight = todayPaneHeight.constant
+        }
+        paneDivider.onDrag = { [weak self] distance in
+            guard let self else { return }
+            setTodayPaneHeight(dragStartTodayPaneHeight + distance)
+        }
+        NSLayoutConstraint.activate([
+            weekStrip.topAnchor.constraint(equalTo: todayPane.topAnchor, constant: 2),
+            weekStrip.leadingAnchor.constraint(equalTo: todayPane.leadingAnchor, constant: 12),
+            weekStrip.trailingAnchor.constraint(equalTo: todayPane.trailingAnchor, constant: -12),
+            dailyScroll.topAnchor.constraint(equalTo: weekStrip.bottomAnchor, constant: 4),
+            dailyScroll.leadingAnchor.constraint(equalTo: todayPane.leadingAnchor),
+            dailyScroll.trailingAnchor.constraint(equalTo: todayPane.trailingAnchor),
+            dailyScroll.bottomAnchor.constraint(equalTo: todayPane.bottomAnchor),
+        ])
+    }
+
+    private var storedTodayPaneHeight: CGFloat {
+        let stored = UserDefaults.standard.double(forKey: "todayPane.height")
+        return stored > 0 ? stored : 220
+    }
+
+    private func setTodayPaneCollapsed(_ collapsed: Bool) {
+        todayPane.isHidden = collapsed
+        paneDivider.isHidden = collapsed
+        todayPaneHeight.constant = collapsed ? 0 : clampedTodayPaneHeight(storedTodayPaneHeight)
+        dividerHeight.constant = collapsed ? 0 : dividerThickness
+        todayToggleButton?.contentTintColor = collapsed
+            ? NSColor(calibratedWhite: 0.64, alpha: 1)
+            : accentColor
+        UserDefaults.standard.set(collapsed, forKey: "todayPane.collapsed")
+        relayoutEditors()
+    }
+
+    private func setTodayPaneHeight(_ height: CGFloat) {
+        guard !todayPane.isHidden else { return }
+        let clamped = clampedTodayPaneHeight(height)
+        todayPaneHeight.constant = clamped
+        UserDefaults.standard.set(Double(clamped), forKey: "todayPane.height")
+        relayoutEditors()
+    }
+
+    /// The note below always keeps a usable height; the pane gives way when the window shrinks.
+    private func clampedTodayPaneHeight(_ height: CGFloat) -> CGFloat {
+        let windowHeight = panel.contentView?.bounds.height ?? panel.frame.height
+        let ceiling = max(minimumTodayPaneHeight, windowHeight - 44 - dividerThickness - 48 - minimumNoteHeight)
+        return min(max(height, minimumTodayPaneHeight), ceiling)
+    }
+
+    private func relayoutEditors() {
+        guard let root = panel.contentView else { return }
+        root.layoutSubtreeIfNeeded()
+        editor.layoutForScrollableViewport()
+        dailyEditor.layoutForScrollableViewport()
     }
 
     private func configureOverlayDismissal() {
@@ -574,8 +685,9 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         newButton.toolTip = "새 노트 (⌘N)"
         let closeButton = toolbarButton(symbol: "xmark", label: "노트 숨기기", action: #selector(hidePanel))
         closeButton.toolTip = "숨기기 (⌘Q)"
-        let todayButton = toolbarButton(symbol: "calendar", label: "오늘 할 일", action: #selector(openTodayFromButton))
-        todayButton.toolTip = "오늘 할 일 (⌥⇧`)"
+        let todayButton = toolbarButton(symbol: "calendar", label: "오늘 할 일 펼치기 또는 접기", action: #selector(toggleTodayPane))
+        todayButton.toolTip = "오늘 할 일 펼치기/접기 (⌥⇧`로 바로 열기)"
+        todayToggleButton = todayButton
         let header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(listButton)
@@ -891,7 +1003,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         sidebar.isHidden = true
         formatOverlay.isHidden = true
         if focusEditor {
-            panel.makeFirstResponder(editor)
+            panel.makeFirstResponder(activeEditor)
         }
     }
 
@@ -924,14 +1036,14 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     @objc private func applyBoldFromMenu() { toggleBold(); closeOverlays() }
     @objc private func applyStrikethroughFromMenu() { toggleStrikethrough(); closeOverlays() }
-    @objc private func applyListFromMenu() { editor.insertListItem(.bullet); closeOverlays() }
-    @objc private func applyOrderedListFromMenu() { editor.insertListItem(.ordered(1)); closeOverlays() }
-    @objc private func applyChecklistFromMenu() { editor.insertListItem(.uncheckedChecklist); closeOverlays() }
+    @objc private func applyListFromMenu() { activeEditor.insertListItem(.bullet); closeOverlays() }
+    @objc private func applyOrderedListFromMenu() { activeEditor.insertListItem(.ordered(1)); closeOverlays() }
+    @objc private func applyChecklistFromMenu() { activeEditor.insertListItem(.uncheckedChecklist); closeOverlays() }
     @objc private func resizeImageSmall() { resizeImage(0.45); closeOverlays() }
     @objc private func resizeImageMedium() { resizeImage(0.68); closeOverlays() }
     @objc private func resizeImageLarge() { resizeImage(0.92); closeOverlays() }
     @objc private func deleteSelectedImageFromMenu() {
-        if !editor.deleteSelectedImage() { showError("삭제할 이미지를 먼저 선택하세요.") }
+        if !activeEditor.deleteSelectedImage() { showError("삭제할 이미지를 먼저 선택하세요.") }
         closeOverlays()
     }
     @objc private func trashCurrentFromMenu() { closeOverlays(); trashCurrent() }
@@ -955,7 +1067,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     private func resizeImage(_ fraction: CGFloat) {
-        if !editor.resizeSelectedImage(fraction: fraction) {
+        if !activeEditor.resizeSelectedImage(fraction: fraction) {
             showError("크기를 바꿀 이미지를 먼저 선택하세요.")
         }
     }
@@ -1007,13 +1119,9 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     private func saveNow() {
         autosaveTimer?.invalidate()
-        guard !suppressChanges, editor.isEditable, !dailyTemplateIsUntouched else { return }
+        guard !suppressChanges, editor.isEditable else { return }
         do {
-            let saved = try repository.save(
-                id: currentID,
-                content: editor.attributedString(),
-                dailyDay: currentDailyDay
-            )
+            let saved = try repository.save(id: currentID, content: editor.attributedString())
             reloadRows(selecting: saved?.id)
             updateTitle()
         } catch {
@@ -1088,7 +1196,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         guard id != currentID else { return }
         do {
             let note = try repository.load(id: id)
-            setCurrentNote(id, dailyDay: note.metadata.dailyDay)
+            currentID = id
             let normalizedAppearance = replaceEditorContent(with: note.content)
             editor.isEditable = !note.metadata.isTrashed
             reloadRows(selecting: id)
@@ -1101,40 +1209,106 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     @discardableResult
     private func replaceEditorContent(with content: NSAttributedString) -> Bool {
-        suppressChanges = true
-        editor.requiredTextStorage.setAttributedString(content)
-        let normalizedAppearance = editor.reloadListPresentation()
-        editor.layoutForScrollableViewport(scrollToDocumentStart: true)
-        resetTypingAttributes()
-        editor.resetUndoHistory()
-        suppressChanges = false
+        let normalizedAppearance = setContent(content, of: editor)
         updateTitle()
         updateWordCount()
         return normalizedAppearance
     }
 
-    private func resetTypingAttributes() {
-        editor.typingAttributes = [
+    @discardableResult
+    private func setContent(_ content: NSAttributedString, of target: RichTextView) -> Bool {
+        suppressChanges = true
+        target.requiredTextStorage.setAttributedString(content)
+        let normalizedAppearance = target.reloadListPresentation()
+        target.layoutForScrollableViewport(scrollToDocumentStart: true)
+        target.typingAttributes = defaultTypingAttributes()
+        target.resetUndoHistory()
+        suppressChanges = false
+        return normalizedAppearance
+    }
+
+    private func defaultTypingAttributes() -> [NSAttributedString.Key: Any] {
+        [
             .font: NSFont.systemFont(ofSize: 17),
             .foregroundColor: NSColor(calibratedWhite: 0.91, alpha: 1),
             .paragraphStyle: editorParagraphStyle(),
         ]
     }
 
+    private var activeEditor: RichTextView {
+        lastFocusedEditor ?? editor
+    }
+
+    /// Loads the selected day into the top pane: its saved page, or an untouched empty
+    /// checkbox that is only saved once something is written into it.
+    private func loadDaily() {
+        dailyAutosaveTimer?.invalidate()
+        let day = DailyNote.dayKey(for: selectedDay)
+        todayKeyAtLastRefresh = DailyNote.dayKey(for: Date())
+        if let page = repository.dailyNote(day: day) {
+            do {
+                let stored = try repository.load(id: page.id)
+                dailyID = page.id
+                dailyTemplateIsUntouched = false
+                setContent(stored.content, of: dailyEditor)
+            } catch {
+                showError(error.localizedDescription)
+            }
+        } else {
+            dailyID = UUID()
+            setContent(NSAttributedString(), of: dailyEditor)
+            suppressChanges = true
+            dailyEditor.insertListItem(.uncheckedChecklist)
+            dailyEditor.resetUndoHistory()
+            suppressChanges = false
+            dailyTemplateIsUntouched = true
+        }
+        refreshWeekStrip()
+    }
+
+    /// A page left with only empty checkboxes is removed rather than kept, so the week's dots
+    /// mark only days that hold something.
+    private func saveDaily() {
+        dailyAutosaveTimer?.invalidate()
+        guard !suppressChanges, !dailyTemplateIsUntouched else { return }
+        let content = dailyEditor.attributedString()
+        do {
+            try repository.save(
+                id: dailyID,
+                content: NoteContent.isBlankList(content) ? NSAttributedString() : content,
+                dailyDay: DailyNote.dayKey(for: selectedDay)
+            )
+            refreshWeekStrip()
+        } catch {
+            showError(error.localizedDescription)
+        }
+    }
+
+    private func refreshWeekStrip() {
+        weekStrip.show(
+            selected: selectedDay,
+            today: Date(),
+            daysWithContent: repository.daysWithDailyNotes()
+        )
+    }
+
+    private func followDayRollover(now: Date) {
+        let todayKey = DailyNote.dayKey(for: now)
+        guard todayKey != todayKeyAtLastRefresh else { return }
+        if DailyNote.dayKey(for: selectedDay) == todayKeyAtLastRefresh {
+            selectDay(now)
+        } else {
+            todayKeyAtLastRefresh = todayKey
+            refreshWeekStrip()
+        }
+    }
+
     private func newNoteForCurrentScope() {
         noteCycle.removeAll()
-        setCurrentNote(UUID())
+        currentID = UUID()
         replaceEditorContent(with: NSAttributedString())
         editor.isEditable = !showingTrash
         updateTitle()
-    }
-
-    /// Every switch of the edited note goes through here, so the daily key and the template
-    /// flag never outlive the note they describe.
-    private func setCurrentNote(_ id: UUID, dailyDay: String? = nil) {
-        currentID = id
-        currentDailyDay = dailyDay
-        dailyTemplateIsUntouched = false
     }
 
     private func showImagePreview(_ image: NSImage) {
