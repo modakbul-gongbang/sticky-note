@@ -84,10 +84,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try manager.register()
             shortcutStatus = "연결됨 - Option+`"
-            panelController?.showStatus("준비됨 · ⌥`", isError: false)
         } catch {
             shortcutStatus = "연결 실패 - 클릭해 다시 시도"
-            panelController?.showStatus(error.localizedDescription, isError: true)
+            panelController?.showError(error.localizedDescription)
         }
         rebuildStatusMenu()
     }
@@ -105,10 +104,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             loginStatus = SMAppService.mainApp.status == .enabled
                 ? "등록됨 - 로그인 시 자동 실행"
                 : "로그인 실행 승인 필요 - 클릭해 확인"
-            panelController?.showStatus(loginStatus, isError: SMAppService.mainApp.status != .enabled)
         } catch {
             loginStatus = "로그인 실행 실패 - 클릭해 다시 시도"
-            panelController?.showStatus("로그인 실행 등록 실패: \(error.localizedDescription)", isError: true)
+            panelController?.showError("로그인 실행 등록 실패: \(error.localizedDescription)")
         }
         rebuildStatusMenu()
     }
@@ -126,6 +124,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hideItem.keyEquivalentModifierMask = [.command]
         hideItem.target = self
         appMenu.addItem(hideItem)
+        let closeItem = NSMenuItem(title: "창 닫기", action: #selector(hidePanel), keyEquivalent: "w")
+        closeItem.keyEquivalentModifierMask = [.command]
+        closeItem.target = self
+        appMenu.addItem(closeItem)
         appMenu.addItem(.separator())
         let terminateItem = NSMenuItem(title: "완전히 종료", action: #selector(terminateApplication), keyEquivalent: "q")
         terminateItem.keyEquivalentModifierMask = [.command, .option]
@@ -156,6 +158,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         noteMenu.items.last?.keyEquivalentModifierMask = [.control]
         noteMenu.addItem(withTitle: "다음 노트", action: #selector(StickyPanelController.showNextNote), keyEquivalent: "\u{19}")
         noteMenu.items.last?.keyEquivalentModifierMask = [.control, .shift]
+        // ⌘⌫ belongs to the editor: it deletes to the start of the line. AppKit ignores Shift
+        // on a delete key equivalent, so ⇧⌘⌫ would still swallow it; Control is honoured.
+        noteMenu.addItem(withTitle: "휴지통으로 이동", action: #selector(StickyPanelController.trashCurrent), keyEquivalent: "\u{8}")
+        noteMenu.items.last?.keyEquivalentModifierMask = [.command, .control]
         noteMenu.addItem(.separator())
         noteMenu.addItem(withTitle: "목록 열기/닫기", action: #selector(StickyPanelController.toggleSidebar), keyEquivalent: "l")
         noteMenu.items.last?.keyEquivalentModifierMask = [.command, .shift]

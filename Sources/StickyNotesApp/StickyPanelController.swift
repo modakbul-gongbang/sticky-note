@@ -3,16 +3,20 @@ import StickyNotesCore
 
 final class DismissiblePanel: NSPanel {
     var handleOverlayMouseDown: ((NSPoint) -> Void)?
+    var handleModifierChange: ((NSEvent.ModifierFlags) -> Void)?
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .otherMouseDown {
             handleOverlayMouseDown?(event.locationInWindow)
         }
+        if event.type == .flagsChanged {
+            handleModifierChange?(event.modifierFlags)
+        }
         super.sendEvent(event)
     }
 }
 
-final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     private let repository: NoteRepository
     private let panel: DismissiblePanel
     private let editor = RichTextView()
@@ -25,7 +29,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private let noteSwitchList = NSStackView()
     private let headerTitleLabel = NSTextField(labelWithString: "")
     private let noteSwitchPositionLabel = NSTextField(labelWithString: "")
-    private let statusLabel = NSTextField(labelWithString: "")
+    private let errorLabel = NSTextField(labelWithString: "")
     private let wordCountLabel = NSTextField(labelWithString: "0단어")
     private let restoreButton = NSButton(title: "복원", target: nil, action: nil)
     private let emptyTrashButton = NSButton(title: "휴지통 비우기", target: nil, action: nil)
@@ -33,8 +37,11 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private var currentID = UUID()
     private var rows: [NoteMetadata] = []
     private var autosaveTimer: Timer?
-    private var statusTimer: Timer?
+    private var errorTimer: Timer?
     private var noteSwitchTimer: Timer?
+    /// True while the switcher was opened with Control held: it then lives exactly as long
+    /// as the key, like the app switcher. Opened from the menu, it falls back to a timer.
+    private var noteSwitchFollowsControlKey = false
     private var suppressChanges = false
     private var isRefreshingRows = false
     private var showingTrash = false
@@ -106,7 +113,6 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         editor.isEditable = true
         panel.makeFirstResponder(editor)
         closeOverlays()
-        showStatus("새 노트 - 첫 입력부터 자동 저장됩니다.", isError: false)
     }
 
     @objc func toggleSidebar() {
@@ -132,23 +138,61 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         }
     }
 
-    @objc private func trashCurrent() {
+    @objc func trashCurrent() {
+        trash(id: currentID)
+    }
+
+    /// Moving to the trash is reversible from the trash scope, so it runs without a confirm.
+    /// An unsaved empty draft has nothing to move and stays where it is.
+    private func trash(id: UUID) {
         guard !showingTrash else { return }
         saveNow()
-        guard repository.list().contains(where: { $0.id == currentID }) else {
-            showStatus("빈 초안은 삭제할 필요가 없습니다.", isError: false)
-            return
-        }
+        guard repository.list().contains(where: { $0.id == id }) else { return }
         do {
-            try repository.moveToTrash(id: currentID)
+            try repository.moveToTrash(id: id)
+            guard id == currentID else {
+                reloadRows(selecting: currentID)
+                return
+            }
             reloadRows(selecting: nil)
             if let next = rows.first {
                 loadNote(id: next.id)
             } else {
                 newNoteForCurrentScope()
             }
-            showStatus("노트를 휴지통으로 옮겼습니다.", isError: false)
-        } catch { showStatus(error.localizedDescription, isError: true) }
+        } catch { showError(error.localizedDescription) }
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        updateRowMenu(menu, row: tableView.clickedRow)
+    }
+
+    /// Right-click on a list row acts on that row, not on the note open in the editor.
+    func updateRowMenu(_ menu: NSMenu, row: Int) {
+        menu.removeAllItems()
+        guard row >= 0, row < rows.count else { return }
+        let id = rows[row].id
+        if showingTrash {
+            let restore = NSMenuItem(title: "복원", action: #selector(restoreRow(_:)), keyEquivalent: "")
+            restore.representedObject = id
+            restore.target = self
+            menu.addItem(restore)
+        } else {
+            let trash = NSMenuItem(title: "휴지통으로 이동", action: #selector(trashRow(_:)), keyEquivalent: "")
+            trash.representedObject = id
+            trash.target = self
+            menu.addItem(trash)
+        }
+    }
+
+    @objc private func trashRow(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        trash(id: id)
+    }
+
+    @objc private func restoreRow(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        restore(id: id)
     }
 
     @objc func toggleBold() {
@@ -225,7 +269,6 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     @objc func toggleChecklistLine() {
         panel.makeFirstResponder(editor)
         editor.toggleChecklistOnCurrentLine()
-        showStatus("현재 줄 체크리스트 전환", isError: false)
     }
 
     @objc func undoEditor() {
@@ -239,21 +282,22 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     @objc func showPreviousNote() {
-        cycleNote(step: 1)
+        cycleNote(step: 1, controlHeld: NSEvent.modifierFlags.contains(.control))
     }
 
     @objc func showNextNote() {
-        cycleNote(step: -1)
+        cycleNote(step: -1, controlHeld: NSEvent.modifierFlags.contains(.control))
     }
 
-    func showStatus(_ message: String, isError: Bool) {
-        statusTimer?.invalidate()
-        statusLabel.stringValue = "  \(message)  "
-        statusLabel.textColor = isError ? accentColor : NSColor(calibratedWhite: 0.78, alpha: 1)
-        statusLabel.toolTip = message
-        statusLabel.isHidden = false
-        statusTimer = Timer.scheduledTimer(withTimeInterval: isError ? 6 : 1.4, repeats: false) { [weak self] _ in
-            self?.statusLabel.isHidden = true
+    /// Only failures reach the footer: a save that did not land, or a command that needs a
+    /// selection first. Routine progress ("saving", "saved") is nothing the writer acts on.
+    func showError(_ message: String) {
+        errorTimer?.invalidate()
+        errorLabel.stringValue = "  \(message)  "
+        errorLabel.toolTip = message
+        errorLabel.isHidden = false
+        errorTimer = Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in
+            self?.errorLabel.isHidden = true
         }
     }
 
@@ -277,7 +321,6 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         autosaveTimer?.invalidate()
         updateTitle()
         updateWordCount()
-        showStatus("저장 중…", isError: false)
         autosaveTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
             self?.saveNow()
         }
@@ -347,6 +390,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         panel.canHide = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.minSize = CGSize(width: 340, height: 480)
+        panel.maxSize = CGSize(width: 640, height: 900)
         panel.isReleasedWhenClosed = false
         panel.appearance = NSAppearance(named: .darkAqua)
         panel.backgroundColor = NSColor(calibratedRed: 0.052, green: 0.055, blue: 0.062, alpha: 1)
@@ -400,14 +444,14 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         configureSidebar()
         configureFormatOverlay()
         configureNoteSwitchOverlay()
-        configureStatusLabel()
+        configureErrorLabel()
         configureWordCountLabel()
         root.addSubview(editorScroll)
         root.addSubview(header)
         root.addSubview(sidebar)
         root.addSubview(formatOverlay)
         root.addSubview(noteSwitchOverlay)
-        root.addSubview(statusLabel)
+        root.addSubview(errorLabel)
         root.addSubview(wordCountLabel)
         root.addSubview(formatButton)
 
@@ -443,10 +487,10 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             formatButton.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
             wordCountLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
             wordCountLabel.centerYAnchor.constraint(equalTo: formatButton.centerYAnchor),
-            statusLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            statusLabel.centerYAnchor.constraint(equalTo: formatButton.centerYAnchor),
-            statusLabel.heightAnchor.constraint(equalToConstant: 26),
-            statusLabel.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -180),
+            errorLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            errorLabel.centerYAnchor.constraint(equalTo: formatButton.centerYAnchor),
+            errorLabel.heightAnchor.constraint(equalToConstant: 26),
+            errorLabel.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -180),
         ])
         root.layoutSubtreeIfNeeded()
         editor.layoutForScrollableViewport()
@@ -456,6 +500,10 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private func configureOverlayDismissal() {
         panel.handleOverlayMouseDown = { [weak self] point in
             self?.dismissOverlaysForMouseDown(at: point)
+        }
+        panel.handleModifierChange = { [weak self] flags in
+            guard let self, noteSwitchFollowsControlKey, !flags.contains(.control) else { return }
+            hideNoteSwitchOverlay()
         }
         escapeEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self,
@@ -474,15 +522,20 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         listButton.toolTip = "노트 목록 열기/닫기 (⌘⇧L)"
         let newButton = toolbarButton(symbol: "square.and.pencil", label: "새 노트", action: #selector(newNote))
         newButton.toolTip = "새 노트 (⌘N)"
+        let closeButton = toolbarButton(symbol: "xmark", label: "노트 숨기기", action: #selector(hidePanel))
+        closeButton.toolTip = "숨기기 (⌘Q)"
         let header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(listButton)
         header.addSubview(newButton)
+        header.addSubview(closeButton)
         header.addSubview(headerTitleLabel)
         NSLayoutConstraint.activate([
             listButton.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             listButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            newButton.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            closeButton.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            closeButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            newButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
             newButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             headerTitleLabel.centerXAnchor.constraint(equalTo: header.centerXAnchor),
             headerTitleLabel.centerYAnchor.constraint(equalTo: listButton.centerYAnchor),
@@ -569,6 +622,9 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         tableView.delegate = self
         tableView.dataSource = self
         tableView.setAccessibilityLabel("노트 목록")
+        let rowMenu = NSMenu()
+        rowMenu.delegate = self
+        tableView.menu = rowMenu
         let scroll = NSScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.drawsBackground = false
@@ -740,18 +796,19 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         return button
     }
 
-    private func configureStatusLabel() {
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        statusLabel.alignment = .center
-        statusLabel.lineBreakMode = .byTruncatingTail
-        statusLabel.drawsBackground = true
-        statusLabel.backgroundColor = NSColor(calibratedWhite: 0.13, alpha: 0.96)
-        statusLabel.wantsLayer = true
-        statusLabel.layer?.cornerRadius = 8
-        statusLabel.layer?.masksToBounds = true
-        statusLabel.isHidden = true
-        statusLabel.setAccessibilityLabel("저장 상태")
+    private func configureErrorLabel() {
+        errorLabel.translatesAutoresizingMaskIntoConstraints = false
+        errorLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        errorLabel.textColor = accentColor
+        errorLabel.alignment = .center
+        errorLabel.lineBreakMode = .byTruncatingTail
+        errorLabel.drawsBackground = true
+        errorLabel.backgroundColor = NSColor(calibratedWhite: 0.13, alpha: 0.96)
+        errorLabel.wantsLayer = true
+        errorLabel.layer?.cornerRadius = 8
+        errorLabel.layer?.masksToBounds = true
+        errorLabel.isHidden = true
+        errorLabel.setAccessibilityLabel("오류 안내")
     }
 
     private func configureWordCountLabel() {
@@ -768,11 +825,16 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         return style
     }
 
-    private func closeOverlays(focusEditor: Bool = true) {
+    private func hideNoteSwitchOverlay() {
         noteSwitchTimer?.invalidate()
+        noteSwitchFollowsControlKey = false
+        noteSwitchOverlay.isHidden = true
+    }
+
+    private func closeOverlays(focusEditor: Bool = true) {
+        hideNoteSwitchOverlay()
         sidebar.isHidden = true
         formatOverlay.isHidden = true
-        noteSwitchOverlay.isHidden = true
         if focusEditor {
             panel.makeFirstResponder(editor)
         }
@@ -789,8 +851,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         guard !sidebar.isHidden || !formatOverlay.isHidden || !noteSwitchOverlay.isHidden,
               let contentView = panel.contentView else { return }
         if !noteSwitchOverlay.isHidden {
-            noteSwitchTimer?.invalidate()
-            noteSwitchOverlay.isHidden = true
+            hideNoteSwitchOverlay()
         }
         let contentPoint = contentView.convert(windowPoint, from: nil)
         if !sidebar.isHidden, sidebar.frame.contains(contentPoint) { return }
@@ -815,7 +876,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     @objc private func resizeImageMedium() { resizeImage(0.68); closeOverlays() }
     @objc private func resizeImageLarge() { resizeImage(0.92); closeOverlays() }
     @objc private func deleteSelectedImageFromMenu() {
-        if !editor.deleteSelectedImage() { showStatus("삭제할 이미지를 먼저 선택하세요.", isError: true) }
+        if !editor.deleteSelectedImage() { showError("삭제할 이미지를 먼저 선택하세요.") }
         closeOverlays()
     }
     @objc private func trashCurrentFromMenu() { closeOverlays(); trashCurrent() }
@@ -840,7 +901,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     private func resizeImage(_ fraction: CGFloat) {
         if !editor.resizeSelectedImage(fraction: fraction) {
-            showStatus("크기를 바꿀 이미지를 먼저 선택하세요.", isError: true)
+            showError("크기를 바꿀 이미지를 먼저 선택하세요.")
         }
     }
 
@@ -856,37 +917,37 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     @objc private func restoreCurrent() {
-        guard showingTrash, rows.contains(where: { $0.id == currentID }) else { return }
+        restore(id: currentID)
+    }
+
+    private func restore(id: UUID) {
+        guard showingTrash, rows.contains(where: { $0.id == id }) else { return }
         do {
-            try repository.restore(id: currentID)
+            try repository.restore(id: id)
+            guard id == currentID else {
+                reloadRows(selecting: currentID)
+                return
+            }
             reloadRows(selecting: nil)
             newNoteForCurrentScope()
-            showStatus("노트를 복원했습니다.", isError: false)
-        } catch { showStatus(error.localizedDescription, isError: true) }
+        } catch { showError(error.localizedDescription) }
     }
 
     @objc private func confirmEmptyTrash() {
         let count = repository.list(includeTrashed: true).count
-        guard count > 0 else {
-            showStatus("휴지통이 비어 있습니다.", isError: false)
-            return
-        }
+        guard count > 0 else { return }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "휴지통의 노트 \(count)개를 영구 삭제할까요?"
         alert.informativeText = "노트의 서식과 첨부 이미지도 함께 삭제되며 복구할 수 없습니다."
         alert.addButton(withTitle: "영구 삭제")
         alert.addButton(withTitle: "취소")
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            showStatus("휴지통 비우기를 취소했습니다. 모든 노트가 유지됩니다.", isError: false)
-            return
-        }
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            let deleted = try repository.emptyTrash(confirmed: true)
+            try repository.emptyTrash(confirmed: true)
             reloadRows(selecting: nil)
             newNoteForCurrentScope()
-            showStatus("휴지통의 테스트 노트 \(deleted)개를 영구 삭제했습니다.", isError: false)
-        } catch { showStatus(error.localizedDescription, isError: true) }
+        } catch { showError(error.localizedDescription) }
     }
 
     private func saveNow() {
@@ -894,15 +955,14 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         guard !suppressChanges, editor.isEditable else { return }
         do {
             let saved = try repository.save(id: currentID, content: editor.attributedString())
-            showStatus(saved == nil ? "빈 초안은 저장하지 않습니다." : "저장됨", isError: false)
             reloadRows(selecting: saved?.id)
             updateTitle()
         } catch {
-            showStatus(error.localizedDescription, isError: true)
+            showError(error.localizedDescription)
         }
     }
 
-    private func cycleNote(step: Int) {
+    func cycleNote(step: Int, controlHeld: Bool) {
         saveNow()
         showingTrash = false
         scopeControl.selectedSegment = 0
@@ -913,19 +973,26 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             || !noteCycle.contains(where: { $0.id == currentID }) {
             noteCycle = active
         }
-        guard noteCycle.count > 1,
-              let currentIndex = noteCycle.firstIndex(where: { $0.id == currentID }) else {
+        // An unsaved empty draft is not in the list; it sits ahead of the newest note, so
+        // "previous" lands on the newest saved note and "next" wraps to the oldest.
+        let currentIndex = noteCycle.firstIndex(where: { $0.id == currentID })
+        guard !noteCycle.isEmpty, currentIndex == nil || noteCycle.count > 1 else {
             closeOverlays()
             return
         }
-        let targetIndex = (currentIndex + step + noteCycle.count) % noteCycle.count
+        let targetIndex: Int
+        if let currentIndex {
+            targetIndex = (currentIndex + step + noteCycle.count) % noteCycle.count
+        } else {
+            targetIndex = step > 0 ? 0 : noteCycle.count - 1
+        }
         closeOverlays(focusEditor: false)
         loadNote(id: noteCycle[targetIndex].id)
-        showNoteSwitchOverlay(selectedIndex: targetIndex)
+        showNoteSwitchOverlay(selectedIndex: targetIndex, followsControlKey: controlHeld)
         panel.makeFirstResponder(editor)
     }
 
-    private func showNoteSwitchOverlay(selectedIndex: Int) {
+    private func showNoteSwitchOverlay(selectedIndex: Int, followsControlKey: Bool) {
         noteSwitchTimer?.invalidate()
         for row in noteSwitchList.arrangedSubviews {
             noteSwitchList.removeArrangedSubview(row)
@@ -939,8 +1006,10 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         noteSwitchPositionLabel.stringValue = "\(selectedIndex + 1) / \(noteCycle.count)"
         noteSwitchOverlay.superview?.addSubview(noteSwitchOverlay, positioned: .above, relativeTo: nil)
         noteSwitchOverlay.isHidden = false
+        noteSwitchFollowsControlKey = followsControlKey
+        guard !noteSwitchFollowsControlKey else { return }
         noteSwitchTimer = Timer.scheduledTimer(withTimeInterval: 1.15, repeats: false) { [weak self] _ in
-            self?.noteSwitchOverlay.isHidden = true
+            self?.hideNoteSwitchOverlay()
         }
     }
 
@@ -967,11 +1036,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             applyTitle(note.metadata.title)
             if normalizedAppearance, editor.isEditable {
                 saveNow()
-                showStatus("노트 서식을 정리해 저장했습니다.", isError: false)
-            } else {
-                showStatus(note.metadata.isTrashed ? "휴지통의 노트 - 복원하기 전에는 읽기 전용입니다." : "저장됨", isError: false)
             }
-        } catch { showStatus(error.localizedDescription, isError: true) }
+        } catch { showError(error.localizedDescription) }
     }
 
     @discardableResult

@@ -141,7 +141,15 @@ import Testing
         let missingDisplayFrame = CGRect(x: 2200, y: -500, width: 900, height: 200)
         let result = WindowPlacement.frame(remembered: missingDisplayFrame, visibleFrame: visible)
         #expect(visible.contains(result))
-        #expect(result.size == CGSize(width: 800, height: 480))
+        #expect(result.size == CGSize(width: 640, height: 480))
+    }
+
+    @Test func rememberedFrameIsCappedAtTheMaximumSize() {
+        let visible = CGRect(x: 0, y: 0, width: 2560, height: 1440)
+        let oversized = CGRect(x: 10, y: 10, width: 1800, height: 1300)
+        let result = WindowPlacement.frame(remembered: oversized, visibleFrame: visible)
+        #expect(result.size == CGSize(width: 640, height: 900))
+        #expect(result.origin == oversized.origin)
     }
 
     @Test func noRememberedFrameUsesDefaultSizeCenteredOnCurrentScreen() {

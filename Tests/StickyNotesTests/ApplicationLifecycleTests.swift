@@ -22,6 +22,11 @@ import Testing
         #expect(hide.keyEquivalent == "q")
         #expect(hide.keyEquivalentModifierMask == [.command])
 
+        let close = try #require(applicationMenu.items.first(where: { $0.title == "창 닫기" }))
+        #expect(close.action == NSSelectorFromString("hidePanel"))
+        #expect(close.keyEquivalent == "w")
+        #expect(close.keyEquivalentModifierMask == [.command])
+
         let completeQuit = try #require(applicationMenu.items.first(where: { $0.title == "완전히 종료" }))
         #expect(completeQuit.action == NSSelectorFromString("terminateApplication"))
         #expect(completeQuit.keyEquivalent == "q")
@@ -166,6 +171,215 @@ import Testing
         ))
         #expect(noteMenu.performKeyEquivalent(with: nextEvent))
         #expect(editor.string == "노트 1")
+    }
+
+    @Test func controlTabFromAnEmptyDraftOpensTheNewestNote() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let repository = try NoteRepository(rootURL: root)
+        for index in 1...3 {
+            try repository.save(
+                id: UUID(),
+                content: NSAttributedString(string: "노트 \(index)"),
+                modifiedAt: Date(timeIntervalSince1970: TimeInterval(index))
+            )
+        }
+        let controller = StickyPanelController(repository: repository)
+        let contentView = try #require(controller.window?.contentView)
+        let editor = try #require(recursiveSubviews(of: contentView).compactMap { $0 as? RichTextView }.first)
+        let position = try #require(recursiveSubviews(of: contentView).compactMap { $0 as? NSTextField }
+            .first { $0.accessibilityLabel() == "노트 순서" })
+
+        controller.newNote()
+        #expect(editor.string.isEmpty)
+        controller.showPreviousNote()
+        #expect(editor.string == "노트 3")
+        #expect(position.stringValue == "1 / 3")
+        #expect(repository.list().count == 3, "the abandoned empty draft is not saved")
+
+        controller.newNote()
+        controller.showNextNote()
+        #expect(editor.string == "노트 1")
+        #expect(position.stringValue == "3 / 3")
+    }
+
+    @Test func noteSwitcherClosesWhenControlIsReleased() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let repository = try NoteRepository(rootURL: root)
+        for index in 1...2 {
+            try repository.save(
+                id: UUID(),
+                content: NSAttributedString(string: "노트 \(index)"),
+                modifiedAt: Date(timeIntervalSince1970: TimeInterval(index))
+            )
+        }
+        let controller = StickyPanelController(repository: repository)
+        let panel = try #require(controller.window as? DismissiblePanel)
+        let contentView = try #require(panel.contentView)
+        let switchOverlay = try #require(recursiveSubviews(of: contentView).first {
+            $0.accessibilityLabel() == "노트 전환 안내"
+        })
+        func modifiers(_ flags: NSEvent.ModifierFlags) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(
+                with: .flagsChanged,
+                location: .zero,
+                modifierFlags: flags,
+                timestamp: 0,
+                windowNumber: panel.windowNumber,
+                context: nil,
+                characters: "",
+                charactersIgnoringModifiers: "",
+                isARepeat: false,
+                keyCode: 59
+            ))
+        }
+
+        // Opened from the menu with no Control held, the overlay is a timed toast and a
+        // modifier change elsewhere does not touch it.
+        controller.showPreviousNote()
+        #expect(!switchOverlay.isHidden)
+        panel.sendEvent(try modifiers([]))
+        #expect(!switchOverlay.isHidden)
+
+        // Opened while Control is down, it lives exactly as long as the key.
+        controller.dismissOpenOverlays()
+        controller.cycleNote(step: 1, controlHeld: true)
+        #expect(!switchOverlay.isHidden)
+        panel.sendEvent(try modifiers([.shift]))
+        #expect(switchOverlay.isHidden)
+    }
+
+    @Test func headerCloseButtonHidesThePanelFromTheTopRight() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
+        let window = try #require(controller.window)
+        let contentView = try #require(window.contentView)
+        contentView.layoutSubtreeIfNeeded()
+        let descendants = recursiveSubviews(of: contentView)
+        let closeButton = try #require(descendants.compactMap { $0 as? NSButton }.first {
+            $0.accessibilityLabel() == "노트 숨기기"
+        })
+        let closeBox = closeButton.convert(closeButton.bounds, to: contentView)
+        let otherButtons = descendants.compactMap { $0 as? NSButton }.filter { $0 !== closeButton && !$0.isHidden }
+        #expect(closeBox.maxX == descendants.compactMap { $0 as? NSButton }.map { $0.convert($0.bounds, to: contentView).maxX }.max())
+        #expect(otherButtons.allSatisfy { $0.convert($0.bounds, to: contentView).minY <= closeBox.minY })
+        #expect(window.maxSize == CGSize(width: 640, height: 900))
+
+        window.orderFront(nil)
+        #expect(window.isVisible)
+        _ = closeButton.target?.perform(closeButton.action, with: closeButton)
+        #expect(!window.isVisible)
+    }
+
+    @Test func footerCarriesNoSaveStatusOnlyErrors() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
+        let contentView = try #require(controller.window?.contentView)
+        let descendants = recursiveSubviews(of: contentView)
+        #expect(!descendants.contains { $0.accessibilityLabel() == "저장 상태" })
+        let errorLabel = try #require(descendants.compactMap { $0 as? NSTextField }.first {
+            $0.accessibilityLabel() == "오류 안내"
+        })
+        let editor = try #require(descendants.compactMap { $0 as? RichTextView }.first)
+
+        editor.insertText("저장되는 글", replacementRange: NSRange(location: NSNotFound, length: 0))
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+        #expect(errorLabel.isHidden)
+        controller.newNote()
+        #expect(errorLabel.isHidden)
+
+        controller.showError("저장 실패")
+        #expect(!errorLabel.isHidden)
+        #expect(errorLabel.stringValue.contains("저장 실패"))
+    }
+
+    @Test func notesMoveToTheTrashFromTheRowMenuAndCommandDelete() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let repository = try NoteRepository(rootURL: root)
+        let ids = [UUID(), UUID(), UUID()]
+        for (index, id) in ids.enumerated() {
+            try repository.save(
+                id: id,
+                content: NSAttributedString(string: "노트 \(index + 1)"),
+                modifiedAt: Date(timeIntervalSince1970: TimeInterval(index + 1))
+            )
+        }
+        let controller = StickyPanelController(repository: repository)
+        let contentView = try #require(controller.window?.contentView)
+        let descendants = recursiveSubviews(of: contentView)
+        let editor = try #require(descendants.compactMap { $0 as? RichTextView }.first)
+        let table = try #require(descendants.compactMap { $0 as? NSTableView }.first)
+        #expect(editor.string == "노트 3")
+
+        let noteMenu = try #require(AppDelegate().makeMainMenu(for: controller).items
+            .first(where: { $0.submenu?.title == "노트" })?.submenu)
+        let trashItem = try #require(noteMenu.items.first(where: { $0.title == "휴지통으로 이동" }))
+        #expect(trashItem.action == #selector(StickyPanelController.trashCurrent))
+        #expect(trashItem.keyEquivalent == "\u{8}")
+        #expect(trashItem.keyEquivalentModifierMask == [.command, .control])
+
+        // ⌘⌫ stays with the editor: inside a note it deletes to the start of the line.
+        let deleteToLineStart = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "\u{8}",
+            charactersIgnoringModifiers: "\u{8}",
+            isARepeat: false,
+            keyCode: 51
+        ))
+        #expect(!noteMenu.performKeyEquivalent(with: deleteToLineStart))
+
+        // Cmd+Delete moves the open note and the editor falls back to the next one.
+        controller.trashCurrent()
+        #expect(repository.list().map(\.id) == [ids[1], ids[0]])
+        #expect(repository.list(includeTrashed: true).map(\.id) == [ids[2]])
+        #expect(editor.string == "노트 2")
+
+        // The row menu acts on the clicked row, leaving the open note where it is.
+        let rowMenu = try #require(table.menu)
+        controller.toggleSidebar()
+        #expect(table.numberOfRows == 2)
+        controller.updateRowMenu(rowMenu, row: -1)
+        #expect(rowMenu.items.isEmpty, "no clicked row, no actions")
+        let row = try #require((0..<table.numberOfRows).first {
+            (table.view(atColumn: 0, row: $0, makeIfNecessary: true) as? NSTableCellView)?.textField?.stringValue == "노트 1"
+        })
+        controller.updateRowMenu(rowMenu, row: row)
+        let rowTrash = try #require(rowMenu.items.first)
+        #expect(rowTrash.title == "휴지통으로 이동")
+        _ = rowTrash.target?.perform(rowTrash.action, with: rowTrash)
+        #expect(repository.list().map(\.id) == [ids[1]])
+        #expect(editor.string == "노트 2")
+        #expect(table.numberOfRows == 1)
+
+        // The editor's own ⌘⌫ edits the line; it never reaches the note command.
+        editor.setSelectedRange(NSRange(location: editor.requiredTextStorage.length, length: 0))
+        editor.deleteToBeginningOfLine(nil)
+        #expect(editor.string.isEmpty)
+        #expect(Set(repository.list(includeTrashed: true).map(\.id)) == [ids[0], ids[2]], "no note was trashed")
     }
 
     @Test func overlaysCloseForEscapeOutsideClickResignAndHide() throws {
