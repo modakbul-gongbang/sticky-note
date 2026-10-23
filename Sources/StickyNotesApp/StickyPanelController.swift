@@ -35,6 +35,11 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private let emptyTrashButton = NSButton(title: "휴지통 비우기", target: nil, action: nil)
     private let accentColor = NSColor(calibratedRed: 0.88, green: 0.27, blue: 0.23, alpha: 1)
     private var currentID = UUID()
+    /// The day whose to-do page the editor holds, nil for an ordinary note.
+    private var currentDailyDay: String?
+    /// True while today's page is still the untouched date-and-checkbox template: it is not
+    /// saved until the first edit, so opening the day without writing leaves no empty page.
+    private var dailyTemplateIsUntouched = false
     private var rows: [NoteMetadata] = []
     private var autosaveTimer: Timer?
     private var errorTimer: Timer?
@@ -96,6 +101,50 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         }
     }
 
+    /// The today shortcut mirrors Option+`: pressed on today's page it hides the panel,
+    /// anywhere else it brings the panel up on today's page.
+    func toggleTodayOnCurrentScreen(now: Date = Date()) {
+        if panel.isVisible && panel.isKeyWindow && currentDailyDay == DailyNote.dayKey(for: now) {
+            hidePanel()
+        } else {
+            showOnCurrentScreen()
+            openToday(now: now)
+        }
+    }
+
+    @objc func openTodayFromButton() {
+        openToday(now: Date())
+    }
+
+    func openToday(now: Date) {
+        let day = DailyNote.dayKey(for: now)
+        saveNow()
+        noteCycle.removeAll()
+        showingTrash = false
+        scopeControl.selectedSegment = 0
+        closeOverlays()
+        if let existing = repository.dailyNote(day: day) {
+            loadNote(id: existing.id)
+            return
+        }
+        guard currentDailyDay != day else { return }
+        setCurrentNote(UUID(), dailyDay: day)
+        resetTypingAttributes()
+        replaceEditorContent(with: NSAttributedString(
+            string: DailyNote.title(for: now) + "\n",
+            attributes: editor.typingAttributes
+        ))
+        editor.isEditable = true
+        editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
+        suppressChanges = true
+        editor.insertListItem(.uncheckedChecklist)
+        editor.resetUndoHistory()
+        suppressChanges = false
+        dailyTemplateIsUntouched = true
+        reloadRows(selecting: nil)
+        panel.makeFirstResponder(editor)
+    }
+
     @objc func hidePanel() {
         closeOverlays(focusEditor: false)
         saveNow()
@@ -107,7 +156,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         noteCycle.removeAll()
         showingTrash = false
         scopeControl.selectedSegment = 0
-        currentID = UUID()
+        setCurrentNote(UUID())
         replaceEditorContent(with: NSAttributedString())
         reloadRows(selecting: nil)
         editor.isEditable = true
@@ -318,6 +367,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     func textDidChange(_ notification: Notification) {
         guard !suppressChanges else { return }
         noteCycle.removeAll()
+        dailyTemplateIsUntouched = false
         autosaveTimer?.invalidate()
         updateTitle()
         updateWordCount()
@@ -524,9 +574,12 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         newButton.toolTip = "새 노트 (⌘N)"
         let closeButton = toolbarButton(symbol: "xmark", label: "노트 숨기기", action: #selector(hidePanel))
         closeButton.toolTip = "숨기기 (⌘Q)"
+        let todayButton = toolbarButton(symbol: "calendar", label: "오늘 할 일", action: #selector(openTodayFromButton))
+        todayButton.toolTip = "오늘 할 일 (⌥⇧`)"
         let header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(listButton)
+        header.addSubview(todayButton)
         header.addSubview(newButton)
         header.addSubview(closeButton)
         header.addSubview(headerTitleLabel)
@@ -537,6 +590,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             closeButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             newButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
             newButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            todayButton.trailingAnchor.constraint(equalTo: newButton.leadingAnchor, constant: -4),
+            todayButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             headerTitleLabel.centerXAnchor.constraint(equalTo: header.centerXAnchor),
             headerTitleLabel.centerYAnchor.constraint(equalTo: listButton.centerYAnchor),
             headerTitleLabel.leadingAnchor.constraint(
@@ -544,7 +599,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
                 constant: 10
             ),
             headerTitleLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: newButton.leadingAnchor,
+                lessThanOrEqualTo: todayButton.leadingAnchor,
                 constant: -10
             ),
         ])
@@ -952,9 +1007,13 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     private func saveNow() {
         autosaveTimer?.invalidate()
-        guard !suppressChanges, editor.isEditable else { return }
+        guard !suppressChanges, editor.isEditable, !dailyTemplateIsUntouched else { return }
         do {
-            let saved = try repository.save(id: currentID, content: editor.attributedString())
+            let saved = try repository.save(
+                id: currentID,
+                content: editor.attributedString(),
+                dailyDay: currentDailyDay
+            )
             reloadRows(selecting: saved?.id)
             updateTitle()
         } catch {
@@ -1029,7 +1088,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         guard id != currentID else { return }
         do {
             let note = try repository.load(id: id)
-            currentID = id
+            setCurrentNote(id, dailyDay: note.metadata.dailyDay)
             let normalizedAppearance = replaceEditorContent(with: note.content)
             editor.isEditable = !note.metadata.isTrashed
             reloadRows(selecting: id)
@@ -1064,10 +1123,18 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     private func newNoteForCurrentScope() {
         noteCycle.removeAll()
-        currentID = UUID()
+        setCurrentNote(UUID())
         replaceEditorContent(with: NSAttributedString())
         editor.isEditable = !showingTrash
         updateTitle()
+    }
+
+    /// Every switch of the edited note goes through here, so the daily key and the template
+    /// flag never outlive the note they describe.
+    private func setCurrentNote(_ id: UUID, dailyDay: String? = nil) {
+        currentID = id
+        currentDailyDay = dailyDay
+        dailyTemplateIsUntouched = false
     }
 
     private func showImagePreview(_ image: NSImage) {

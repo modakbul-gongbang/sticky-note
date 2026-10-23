@@ -8,6 +8,9 @@ public struct NoteMetadata: Codable, Equatable, Identifiable {
     public var modifiedAt: Date
     public var isTrashed: Bool
     public var storageName: String
+    /// The local day (`yyyy-MM-dd`) whose to-do page this note is; nil for an ordinary note.
+    /// Optional so an index written before daily pages existed still decodes.
+    public var dailyDay: String?
 
     public init(
         id: UUID,
@@ -15,7 +18,8 @@ public struct NoteMetadata: Codable, Equatable, Identifiable {
         searchText: String,
         modifiedAt: Date,
         isTrashed: Bool,
-        storageName: String
+        storageName: String,
+        dailyDay: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -23,6 +27,7 @@ public struct NoteMetadata: Codable, Equatable, Identifiable {
         self.modifiedAt = modifiedAt
         self.isTrashed = isTrashed
         self.storageName = storageName
+        self.dailyDay = dailyDay
     }
 }
 
@@ -75,5 +80,26 @@ public enum NoteContent {
             .first?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return firstLine.isEmpty ? "제목 없음" : String(firstLine.prefix(80))
+    }
+}
+
+/// A daily to-do page is an ordinary note keyed by its local day; the key, not the editable
+/// first line, is what finds today's page again.
+public enum DailyNote {
+    public static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        guard let year = parts.year, let month = parts.month, let day = parts.day else {
+            preconditionFailure("Gregorian date components are always present")
+        }
+        return String(format: "%04d-%02d-%02d", year, month, day)
+    }
+
+    public static func title(for date: Date, calendar: Calendar = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "M월 d일 (E)"
+        return formatter.string(from: date)
     }
 }

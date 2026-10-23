@@ -161,6 +161,58 @@ import Testing
     }
 }
 
+@Suite struct DailyNoteTests {
+    @Test func dayKeyAndTitleFollowTheLocalCalendarDay() throws {
+        var seoul = Calendar(identifier: .gregorian)
+        seoul.timeZone = try #require(TimeZone(identifier: "Asia/Seoul"))
+        // 00:30 in Seoul is still the previous day in UTC; the page belongs to the local day.
+        let earlyMorning = try #require(ISO8601DateFormatter().date(from: "2026-10-22T15:30:00Z"))
+        #expect(DailyNote.dayKey(for: earlyMorning, calendar: seoul) == "2026-10-23")
+        #expect(DailyNote.title(for: earlyMorning, calendar: seoul) == "10월 23일 (금)")
+    }
+
+    @Test func dailyPageKeepsItsDayAcrossEditsAndRestart() throws {
+        let root = try temporaryDirectory()
+        let repository = try NoteRepository(rootURL: root)
+        let id = UUID()
+        try repository.save(id: id, content: NSAttributedString(string: "10월 23일 (금)\n☐\t장보기"), dailyDay: "2026-10-23")
+        try repository.save(id: id, content: NSAttributedString(string: "다른 제목\n☑\t장보기"))
+        try repository.save(id: UUID(), content: NSAttributedString(string: "일반 노트"))
+
+        let reopened = try NoteRepository(rootURL: root)
+        #expect(reopened.dailyNote(day: "2026-10-23")?.id == id)
+        #expect(reopened.dailyNote(day: "2026-10-24") == nil)
+        #expect(reopened.list().filter { $0.dailyDay != nil }.count == 1)
+
+        try reopened.moveToTrash(id: id)
+        #expect(reopened.dailyNote(day: "2026-10-23") == nil)
+    }
+
+    @Test func indexWrittenBeforeDailyPagesStillLoads() throws {
+        let root = try temporaryDirectory()
+        let id = UUID()
+        let storageName = "\(id.uuidString)-legacy.rtfd"
+        let content = NSAttributedString(string: "예전 노트")
+        let wrapper = try content.fileWrapper(
+            from: NSRange(location: 0, length: content.length),
+            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
+        )
+        let notes = root.appendingPathComponent("Notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+        try wrapper.write(to: notes.appendingPathComponent(storageName), options: .atomic, originalContentsURL: nil)
+        let legacyIndex = """
+        [{"id":"\(id.uuidString)","isTrashed":false,"modifiedAt":"2026-09-20T10:00:00Z",\
+        "searchText":"예전 노트","storageName":"\(storageName)","title":"예전 노트"}]
+        """
+        try Data(legacyIndex.utf8).write(to: root.appendingPathComponent("index.json"))
+
+        let repository = try NoteRepository(rootURL: root)
+        #expect(repository.list().map(\.title) == ["예전 노트"])
+        #expect(repository.list().first?.dailyDay == nil)
+        #expect(try repository.load(id: id).content.string == "예전 노트")
+    }
+}
+
 private func temporaryDirectory() throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

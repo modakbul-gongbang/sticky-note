@@ -1,27 +1,55 @@
 import Carbon
 import Foundation
 
+struct HotKey {
+    let id: UInt32
+    let keyCode: UInt32
+    let modifiers: UInt32
+    let displayName: String
+    /// What to free when another app already owns the combination.
+    let conflictHint: String
+
+    static let togglePanel = HotKey(
+        id: 1,
+        keyCode: UInt32(kVK_ANSI_Grave),
+        modifiers: UInt32(optionKey),
+        displayName: "Option+`",
+        conflictHint: "Raycast 설정에서 Notes 단축키를 해제한 뒤 다시 시도하세요."
+    )
+    static let openToday = HotKey(
+        id: 2,
+        keyCode: UInt32(kVK_ANSI_Grave),
+        modifiers: UInt32(optionKey | shiftKey),
+        displayName: "Option+Shift+`",
+        conflictHint: "같은 단축키를 쓰는 앱에서 해제한 뒤 다시 시도하세요."
+    )
+}
+
 enum HotKeyError: LocalizedError {
-    case registrationFailed(OSStatus)
+    case registrationFailed(HotKey, OSStatus)
 
     var errorDescription: String? {
         switch self {
-        case .registrationFailed(let status):
+        case let .registrationFailed(hotKey, status):
             if status == eventHotKeyExistsErr {
-                return "Option+`가 다른 앱에서 사용 중입니다. Raycast 설정에서 Notes 단축키를 해제한 뒤 다시 시도하세요. (OSStatus \(status))"
+                return "\(hotKey.displayName)가 다른 앱에서 사용 중입니다. \(hotKey.conflictHint) (OSStatus \(status))"
             }
-            return "Option+` 단축키를 등록하지 못했습니다. OSStatus \(status)"
+            return "\(hotKey.displayName) 단축키를 등록하지 못했습니다. OSStatus \(status)"
         }
     }
 }
 
+/// One manager owns one registered combination. Each installs its own application handler and
+/// passes on presses that carry another manager's id, so several shortcuts can coexist.
 final class HotKeyManager {
     private let signature: OSType = 0x53544E54 // STNT
+    private let hotKey: HotKey
     private let handler: () -> Void
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
 
-    init(handler: @escaping () -> Void) {
+    init(hotKey: HotKey, handler: @escaping () -> Void) {
+        self.hotKey = hotKey
         self.handler = handler
     }
 
@@ -51,7 +79,9 @@ final class HotKeyManager {
                 )
                 guard status == noErr else { return status }
                 let manager = Unmanaged<HotKeyManager>.fromOpaque(pointer).takeUnretainedValue()
-                guard id.signature == manager.signature else { return OSStatus(eventNotHandledErr) }
+                guard id.signature == manager.signature, id.id == manager.hotKey.id else {
+                    return OSStatus(eventNotHandledErr)
+                }
                 DispatchQueue.main.async { manager.handler() }
                 return noErr
             }
@@ -65,15 +95,15 @@ final class HotKeyManager {
             )
         }
 
-        let id = EventHotKeyID(signature: signature, id: 1)
+        let id = EventHotKeyID(signature: signature, id: hotKey.id)
         let status = RegisterEventHotKey(
-            UInt32(kVK_ANSI_Grave),
-            UInt32(optionKey),
+            hotKey.keyCode,
+            hotKey.modifiers,
             id,
             GetApplicationEventTarget(),
             0,
             &hotKeyRef
         )
-        guard status == noErr else { throw HotKeyError.registrationFailed(status) }
+        guard status == noErr else { throw HotKeyError.registrationFailed(hotKey, status) }
     }
 }

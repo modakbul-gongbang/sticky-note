@@ -50,6 +50,12 @@ public final class NoteRepository {
             .sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
+    /// Today's page is the newest live note keyed to that day; a trashed page does not count,
+    /// so opening the day again starts a fresh one.
+    public func dailyNote(day: String) -> NoteMetadata? {
+        list().first { $0.dailyDay == day }
+    }
+
     public func load(id: UUID) throws -> StoredNote {
         guard let item = metadata.first(where: { $0.id == id }) else {
             throw NoteRepositoryError.invalidPackage(id)
@@ -70,6 +76,7 @@ public final class NoteRepository {
     public func save(
         id: UUID,
         content: NSAttributedString,
+        dailyDay: String? = nil,
         modifiedAt: Date = Date()
     ) throws -> NoteMetadata? {
         if NoteContent.isEmpty(content) {
@@ -95,7 +102,8 @@ public final class NoteRepository {
                 searchText: content.string,
                 modifiedAt: modifiedAt,
                 isTrashed: previousItem?.isTrashed ?? false,
-                storageName: newStorageName
+                storageName: newStorageName,
+                dailyDay: previousItem?.dailyDay ?? dailyDay
             )
             metadata.removeAll { $0.id == id }
             metadata.append(item)

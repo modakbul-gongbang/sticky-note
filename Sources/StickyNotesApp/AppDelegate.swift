@@ -6,8 +6,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var panelController: StickyPanelController?
     private var hotKeyManager: HotKeyManager?
+    private var todayHotKeyManager: HotKeyManager?
     private var loginStatus = "로그인 실행 확인 중"
     private var shortcutStatus = "단축키 연결 확인 중"
+    private var todayShortcutStatus = "오늘 할 일 단축키 연결 확인 중"
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         guard let bundleID = Bundle.main.bundleIdentifier else { return }
@@ -64,9 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "새 노트", action: #selector(newNote), keyEquivalent: "n")
         menu.addItem(.separator())
 
-        let shortcut = NSMenuItem(title: shortcutStatus, action: #selector(retryShortcut), keyEquivalent: "")
-        shortcut.image = NSImage(systemSymbolName: shortcutStatus.hasPrefix("연결됨") ? "checkmark.circle.fill" : "exclamationmark.triangle.fill", accessibilityDescription: nil)
-        menu.addItem(shortcut)
+        for status in [shortcutStatus, todayShortcutStatus] {
+            let shortcut = NSMenuItem(title: status, action: #selector(retryShortcut), keyEquivalent: "")
+            shortcut.image = NSImage(systemSymbolName: status.contains("연결됨") ? "checkmark.circle.fill" : "exclamationmark.triangle.fill", accessibilityDescription: nil)
+            menu.addItem(shortcut)
+        }
 
         let login = NSMenuItem(title: loginStatus, action: #selector(retryLoginItem), keyEquivalent: "")
         login.image = NSImage(systemSymbolName: loginStatus.hasPrefix("등록됨") ? "checkmark.circle.fill" : "exclamationmark.triangle.fill", accessibilityDescription: nil)
@@ -79,13 +83,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configureHotKey() {
-        let manager = HotKeyManager { [weak self] in self?.togglePanel() }
+        let manager = HotKeyManager(hotKey: .togglePanel) { [weak self] in self?.togglePanel() }
         hotKeyManager = manager
         do {
             try manager.register()
-            shortcutStatus = "연결됨 - Option+`"
+            shortcutStatus = "연결됨 - \(HotKey.togglePanel.displayName)"
         } catch {
             shortcutStatus = "연결 실패 - 클릭해 다시 시도"
+            panelController?.showError(error.localizedDescription)
+        }
+
+        let todayManager = HotKeyManager(hotKey: .openToday) { [weak self] in
+            self?.panelController?.toggleTodayOnCurrentScreen()
+        }
+        todayHotKeyManager = todayManager
+        do {
+            try todayManager.register()
+            todayShortcutStatus = "오늘 할 일 연결됨 - \(HotKey.openToday.displayName)"
+        } catch {
+            todayShortcutStatus = "오늘 할 일 단축키 연결 실패 - 클릭해 다시 시도"
             panelController?.showError(error.localizedDescription)
         }
         rebuildStatusMenu()
