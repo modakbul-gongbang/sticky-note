@@ -292,6 +292,17 @@ final class ListItemEditor: NSObject {
 
     func installCursorRects() {
         guard let textView else { return }
+        // Cursor rects are rebuilt inside the window's display pass. Laying text out here can
+        // resize the text view, which AppKit refuses mid-display, so an unfinished layout is
+        // completed on the next turn of the run loop and the rects are asked for again.
+        guard textView.requiredLayoutManager.firstUnlaidCharacterIndex() >= textView.requiredTextStorage.length else {
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView else { return }
+                textView.requiredLayoutManager.ensureLayout(for: textView.requiredTextContainer)
+                textView.window?.invalidateCursorRects(for: textView)
+            }
+            return
+        }
         prepareForDrawing()
         for (paragraph, _) in checklistParagraphs() {
             guard let rect = controlRect(forParagraphAt: paragraph.location) else { continue }

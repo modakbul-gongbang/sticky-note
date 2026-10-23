@@ -1,6 +1,13 @@
 import AppKit
 import Foundation
 
+/// The two separately stored halves of a day page. Only the tasks half is tallied, so a
+/// checkbox written into the memo never counts as a task.
+public enum DailyPart: String, Codable, Sendable {
+    case tasks
+    case memo
+}
+
 public struct NoteMetadata: Codable, Equatable, Identifiable {
     public let id: UUID
     public var title: String
@@ -11,6 +18,9 @@ public struct NoteMetadata: Codable, Equatable, Identifiable {
     /// The local day (`yyyy-MM-dd`) whose to-do page this note is; nil for an ordinary note.
     /// Optional so an index written before daily pages existed still decodes.
     public var dailyDay: String?
+    /// Which half of the day page; nil on pages saved before the memo half existed, which
+    /// held tasks.
+    public var dailyPart: DailyPart?
 
     public init(
         id: UUID,
@@ -19,7 +29,8 @@ public struct NoteMetadata: Codable, Equatable, Identifiable {
         modifiedAt: Date,
         isTrashed: Bool,
         storageName: String,
-        dailyDay: String? = nil
+        dailyDay: String? = nil,
+        dailyPart: DailyPart? = nil
     ) {
         self.id = id
         self.title = title
@@ -28,6 +39,7 @@ public struct NoteMetadata: Codable, Equatable, Identifiable {
         self.isTrashed = isTrashed
         self.storageName = storageName
         self.dailyDay = dailyDay
+        self.dailyPart = dailyPart
     }
 }
 
@@ -76,7 +88,7 @@ public enum NoteContent {
 
     /// True when every line is blank or a list marker with nothing after it - a page that
     /// holds only the empty checkbox it was opened with.
-    public static func isBlankList(_ content: NSAttributedString, ignoring headings: Set<String> = []) -> Bool {
+    public static func isBlankList(_ content: NSAttributedString) -> Bool {
         guard isEmpty(content) == false else { return true }
         var hasAttachment = false
         content.enumerateAttribute(.attachment, in: NSRange(location: 0, length: content.length)) { value, _, stop in
@@ -85,8 +97,7 @@ public enum NoteContent {
         guard !hasAttachment else { return false }
         return content.string.components(separatedBy: .newlines).allSatisfy { line in
             let body = ListItemSyntax.match(in: line).map { String(line.utf16.dropFirst($0.prefixLength)) ?? "" } ?? line
-            let trimmed = body.trimmingCharacters(in: .whitespaces)
-            return trimmed.isEmpty || headings.contains(trimmed)
+            return body.trimmingCharacters(in: .whitespaces).isEmpty
         }
     }
 
@@ -164,16 +175,6 @@ public enum DailyNote {
             return day
         }
     }
-
-    /// A fresh day page: a tasks heading with one empty checkbox, then a memo heading with an
-    /// empty line under it. The headings are ordinary text the user may rename or delete.
-    public static let templateHeadings: Set<String> = ["할 일", "메모"]
-    public static let template: [PastedLine] = [
-        PastedLine(text: "할 일", kind: nil, level: 0, isHeading: true),
-        PastedLine(text: "", kind: .uncheckedChecklist, level: 0, isHeading: false),
-        PastedLine(text: "메모", kind: nil, level: 0, isHeading: true),
-        PastedLine(text: "", kind: nil, level: 0, isHeading: false),
-    ]
 
     public static func title(for date: Date, calendar: Calendar = .current) -> String {
         let formatter = DateFormatter()

@@ -43,6 +43,16 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private var currentID = UUID()
     private let dailyEditor = RichTextView()
     private let dailyScroll = NSScrollView()
+    private let dailyMemoEditor = RichTextView()
+    private let dailyMemoScroll = NSScrollView()
+    /// The day page under the week: a tasks section sized to its rows and a memo section
+    /// taking the rest, each its own editor so neither can spill into the other.
+    private let dayPage = NSView()
+    private let tasksTallyLabel = NSTextField(labelWithString: "")
+    private lazy var tasksHeight = dailyScroll.heightAnchor.constraint(equalToConstant: 80)
+    private let minimumTasksHeight: CGFloat = 40
+    private let minimumMemoHeight: CGFloat = 48
+    private let sectionLabelHeight: CGFloat = 18
     private let todayPane = NSView()
     private let paneDivider = PaneDivider()
     private lazy var weekStrip = WeekStripView(accentColor: accentColor)
@@ -54,17 +64,18 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private lazy var todayPaneHeight = todayPane.heightAnchor.constraint(equalToConstant: storedTodayPaneHeight)
     private lazy var dividerHeight = paneDivider.heightAnchor.constraint(equalToConstant: dividerThickness)
     private let dividerThickness: CGFloat = 16
-    private let minimumTodayPaneHeight: CGFloat = 112
+    private let minimumTodayPaneHeight: CGFloat = 210
     private let minimumNoteHeight: CGFloat = 150
     private var dragStartTodayPaneHeight: CGFloat = 0
     /// The day shown in the top pane, and the today it was chosen against: when the date rolls
     /// over while "today" was showing, the next show moves on to the new day.
     private var selectedDay = Date()
     private var todayKeyAtLastRefresh = DailyNote.dayKey(for: Date())
-    private var dailyID = UUID()
-    /// True while the day's page is still the untouched empty checkbox: it is not saved until
-    /// the first edit, so looking at a day leaves no empty page behind.
-    private var dailyTemplateIsUntouched = false
+    private var dailyTasksID = UUID()
+    private var dailyMemoID = UUID()
+    /// Each half is saved only after an edit, so looking at a day leaves no empty page behind.
+    private var tasksDirty = false
+    private var memoDirty = false
     private var dailyAutosaveTimer: Timer?
     private weak var lastFocusedEditor: RichTextView?
     private weak var todayToggleButton: NSButton?
@@ -139,7 +150,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     /// panel, anywhere else it brings the panel up with the cursor on today's page.
     func toggleTodayOnCurrentScreen(now: Date = Date()) {
         if panel.isVisible, panel.isKeyWindow, !todayPane.isHidden,
-           lastFocusedEditor === dailyEditor,
+           lastFocusedEditor === dailyEditor || lastFocusedEditor === dailyMemoEditor,
            DailyNote.dayKey(for: selectedDay) == DailyNote.dayKey(for: now) {
             hidePanel()
             return
@@ -158,14 +169,9 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         placeDailyCaret()
     }
 
-    /// A fresh page puts the caret on its empty checkbox; a written page at its end.
+    /// The caret lands after the last task, which on a fresh day is its empty checkbox.
     private func placeDailyCaret() {
-        let text = dailyEditor.string as NSString
-        let checkbox = text.range(of: ListItemKind.uncheckedChecklist.prefix)
-        let location = dailyTemplateIsUntouched && checkbox.location != NSNotFound
-            ? NSMaxRange(checkbox)
-            : text.length
-        dailyEditor.setSelectedRange(NSRange(location: location, length: 0))
+        dailyEditor.setSelectedRange(NSRange(location: dailyEditor.string.utf16.count, length: 0))
     }
 
     @objc func toggleTodayPane() {
@@ -412,8 +418,15 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     func textDidChange(_ notification: Notification) {
         guard !suppressChanges else { return }
-        if (notification.object as? RichTextView) === dailyEditor {
-            dailyTemplateIsUntouched = false
+        let changed = notification.object as? RichTextView
+        if changed === dailyEditor || changed === dailyMemoEditor {
+            if changed === dailyEditor {
+                tasksDirty = true
+                updateTasksTally()
+                if updateDayPageSplit() { relayoutEditors() }
+            } else {
+                memoDirty = true
+            }
             dailyAutosaveTimer?.invalidate()
             dailyAutosaveTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
                 self?.saveDaily()
@@ -512,7 +525,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         let formatButton = makeFooterFormatButton()
         let editorScroll = NSScrollView()
         configureEditor(editor, in: editorScroll, label: "노트 편집기", inset: CGSize(width: 20, height: 18))
-        configureEditor(dailyEditor, in: dailyScroll, label: "오늘 할 일 편집기", inset: CGSize(width: 20, height: 4))
+        configureEditor(dailyEditor, in: dailyScroll, label: "오늘 할 일 편집기", inset: CGSize(width: 20, height: 2))
+        configureEditor(dailyMemoEditor, in: dailyMemoScroll, label: "오늘 메모 편집기", inset: CGSize(width: 20, height: 2))
         configureTodayPane()
 
         configureSidebar()
@@ -582,7 +596,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             errorLabel.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -180),
         ])
         setTodayPaneCollapsed(UserDefaults.standard.bool(forKey: "todayPane.collapsed"))
-        for scroll in [editorScroll, dailyScroll] {
+        for scroll in [editorScroll, dailyScroll, dailyMemoScroll] {
             scroll.allowsMagnification = false
             scroll.minMagnification = zoomSteps[0]
             scroll.maxMagnification = zoomSteps[zoomSteps.count - 1]
@@ -591,6 +605,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         root.layoutSubtreeIfNeeded()
         editor.layoutForScrollableViewport()
         dailyEditor.layoutForScrollableViewport()
+        dailyMemoEditor.layoutForScrollableViewport()
         updateWordCount()
         loadDaily()
     }
@@ -619,7 +634,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         target.textContainerInset = inset
         target.isVerticallyResizable = true
         target.isHorizontallyResizable = false
-        target.autoresizingMask = [.width]
+        target.autoresizingMask = []
         target.delegate = self
         target.setAccessibilityLabel(label)
         target.onAttachmentDoubleClick = { [weak self] image in self?.showImagePreview(image) }
@@ -646,7 +661,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         }
         monthCalendar.isHidden = true
         todayPane.addSubview(weekStrip)
-        todayPane.addSubview(dailyScroll)
+        configureDayPage()
+        todayPane.addSubview(dayPage)
         todayPane.addSubview(monthCalendar)
         paneDivider.translatesAutoresizingMaskIntoConstraints = false
         paneDivider.setAccessibilityLabel("오늘 할 일 높이 조절")
@@ -674,15 +690,89 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             weekStrip.topAnchor.constraint(equalTo: todayPane.topAnchor, constant: 2),
             weekStrip.leadingAnchor.constraint(equalTo: todayPane.leadingAnchor, constant: 12),
             weekStrip.trailingAnchor.constraint(equalTo: todayPane.trailingAnchor, constant: -12),
-            dailyScroll.topAnchor.constraint(equalTo: weekStrip.bottomAnchor, constant: 4),
-            dailyScroll.leadingAnchor.constraint(equalTo: todayPane.leadingAnchor),
-            dailyScroll.trailingAnchor.constraint(equalTo: todayPane.trailingAnchor),
-            dailyScroll.bottomAnchor.constraint(equalTo: todayPane.bottomAnchor),
+            dayPage.topAnchor.constraint(equalTo: weekStrip.bottomAnchor, constant: 2),
+            dayPage.leadingAnchor.constraint(equalTo: todayPane.leadingAnchor),
+            dayPage.trailingAnchor.constraint(equalTo: todayPane.trailingAnchor),
+            dayPage.bottomAnchor.constraint(equalTo: todayPane.bottomAnchor),
             monthCalendar.topAnchor.constraint(equalTo: todayPane.topAnchor, constant: 2),
             monthCalendar.leadingAnchor.constraint(equalTo: todayPane.leadingAnchor, constant: 12),
             monthCalendar.trailingAnchor.constraint(equalTo: todayPane.trailingAnchor, constant: -12),
             monthCalendar.bottomAnchor.constraint(equalTo: todayPane.bottomAnchor, constant: -4),
         ])
+    }
+
+    private func configureDayPage() {
+        dayPage.translatesAutoresizingMaskIntoConstraints = false
+        func sectionLabel(_ text: String) -> NSTextField {
+            let label = NSTextField(labelWithString: text)
+            label.font = .systemFont(ofSize: 11, weight: .semibold)
+            label.textColor = NSColor(calibratedWhite: 0.45, alpha: 1)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            return label
+        }
+        let tasksLabel = sectionLabel("할 일")
+        let memoLabel = sectionLabel("메모")
+        tasksTallyLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        tasksTallyLabel.alignment = .right
+        tasksTallyLabel.translatesAutoresizingMaskIntoConstraints = false
+        tasksTallyLabel.setAccessibilityLabel("완료한 할 일")
+        // A scrolled tasks section cuts its last row at the edge; the rule marks that edge as
+        // the end of the section rather than of the text.
+        let sectionRule = NSBox()
+        sectionRule.boxType = .custom
+        sectionRule.borderWidth = 0
+        sectionRule.fillColor = NSColor(calibratedWhite: 0.17, alpha: 1)
+        sectionRule.translatesAutoresizingMaskIntoConstraints = false
+        for view in [tasksLabel, tasksTallyLabel, dailyScroll, sectionRule, memoLabel, dailyMemoScroll] {
+            dayPage.addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            tasksLabel.topAnchor.constraint(equalTo: dayPage.topAnchor, constant: 4),
+            tasksLabel.leadingAnchor.constraint(equalTo: dayPage.leadingAnchor, constant: 24),
+            tasksLabel.heightAnchor.constraint(equalToConstant: sectionLabelHeight - 4),
+            tasksTallyLabel.centerYAnchor.constraint(equalTo: tasksLabel.centerYAnchor),
+            tasksTallyLabel.trailingAnchor.constraint(equalTo: dayPage.trailingAnchor, constant: -24),
+            dailyScroll.topAnchor.constraint(equalTo: tasksLabel.bottomAnchor, constant: 2),
+            dailyScroll.leadingAnchor.constraint(equalTo: dayPage.leadingAnchor),
+            dailyScroll.trailingAnchor.constraint(equalTo: dayPage.trailingAnchor),
+            tasksHeight,
+            sectionRule.topAnchor.constraint(equalTo: dailyScroll.bottomAnchor, constant: 4),
+            sectionRule.leadingAnchor.constraint(equalTo: tasksLabel.leadingAnchor),
+            sectionRule.trailingAnchor.constraint(equalTo: tasksTallyLabel.trailingAnchor),
+            sectionRule.heightAnchor.constraint(equalToConstant: 1),
+            memoLabel.topAnchor.constraint(equalTo: sectionRule.bottomAnchor, constant: 6),
+            memoLabel.leadingAnchor.constraint(equalTo: tasksLabel.leadingAnchor),
+            memoLabel.heightAnchor.constraint(equalToConstant: sectionLabelHeight - 4),
+            dailyMemoScroll.topAnchor.constraint(equalTo: memoLabel.bottomAnchor, constant: 2),
+            dailyMemoScroll.leadingAnchor.constraint(equalTo: dayPage.leadingAnchor),
+            dailyMemoScroll.trailingAnchor.constraint(equalTo: dayPage.trailingAnchor),
+            dailyMemoScroll.bottomAnchor.constraint(equalTo: dayPage.bottomAnchor),
+        ])
+    }
+
+    /// The tasks section is as tall as its rows, up to what leaves the memo its minimum;
+    /// past that it scrolls. Returns whether the height changed.
+    @discardableResult
+    private func updateDayPageSplit() -> Bool {
+        let layoutManager = dailyEditor.requiredLayoutManager
+        layoutManager.ensureLayout(for: dailyEditor.requiredTextContainer)
+        let rows = layoutManager.usedRect(for: dailyEditor.requiredTextContainer).height
+            + dailyEditor.textContainerInset.height * 2
+        let available = dayPage.bounds.height - (sectionLabelHeight + 2) * 2 - 11
+        // Tasks take what their rows need up to three fifths of the page; the memo keeps the rest.
+        let ceiling = max(minimumTasksHeight, min(available - minimumMemoHeight, available * 0.6))
+        let height = min(max(ceil(rows * zoom), minimumTasksHeight), ceiling)
+        guard abs(tasksHeight.constant - height) > 0.5 else { return false }
+        tasksHeight.constant = height
+        return true
+    }
+
+    private func updateTasksTally() {
+        let count = TaskCount(text: dailyEditor.string)
+        tasksTallyLabel.stringValue = count.total > 0 ? "\(count.done)/\(count.total)" : ""
+        tasksTallyLabel.textColor = count.total > 0 && count.done == count.total
+            ? accentColor
+            : NSColor(calibratedWhite: 0.45, alpha: 1)
     }
 
     func setMonthCalendarShown(_ shown: Bool) {
@@ -695,7 +785,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         }
         monthCalendar.isHidden = !shown
         weekStrip.isHidden = shown
-        dailyScroll.isHidden = shown
+        dayPage.isHidden = shown
         relayoutEditors()
     }
 
@@ -719,15 +809,15 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     /// note's stored formatting never depends on how large it was read.
     private func applyZoom(_ value: CGFloat) {
         UserDefaults.standard.set(Double(value), forKey: "editor.zoom")
-        for scroll in [editor.enclosingScrollView, dailyEditor.enclosingScrollView].compactMap({ $0 }) {
+        for scroll in [editor, dailyEditor, dailyMemoEditor].compactMap({ $0.enclosingScrollView }) {
             scroll.magnification = value
         }
         relayoutEditors()
     }
 
     private var storedTodayPaneHeight: CGFloat {
-        let stored = UserDefaults.standard.double(forKey: "todayPane.height")
-        return stored > 0 ? stored : 220
+        let stored = UserDefaults.standard.double(forKey: "dayPage.height")
+        return stored > 0 ? stored : 360
     }
 
     private func configureCollapsedSummary() {
@@ -794,7 +884,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         guard !todayPane.isHidden, monthCalendar.isHidden else { return }
         let clamped = clampedTodayPaneHeight(height)
         todayPaneHeight.constant = clamped
-        UserDefaults.standard.set(Double(clamped), forKey: "todayPane.height")
+        UserDefaults.standard.set(Double(clamped), forKey: "dayPage.height")
         relayoutEditors()
     }
 
@@ -808,8 +898,10 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private func relayoutEditors() {
         guard let root = panel.contentView else { return }
         root.layoutSubtreeIfNeeded()
+        if updateDayPageSplit() { root.layoutSubtreeIfNeeded() }
         editor.layoutForScrollableViewport()
         dailyEditor.layoutForScrollableViewport()
+        dailyMemoEditor.layoutForScrollableViewport()
     }
 
     private func configureOverlayDismissal() {
@@ -1394,43 +1486,63 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         lastFocusedEditor ?? editor
     }
 
-    /// Loads the selected day into the top pane: its saved page, or an untouched empty
-    /// checkbox that is only saved once something is written into it.
+    /// Loads the selected day's two halves into the top pane. A day without tasks starts on
+    /// one empty checkbox and a day without a memo on an empty memo; neither is saved until
+    /// something is written into it.
     private func loadDaily() {
         dailyAutosaveTimer?.invalidate()
         let day = DailyNote.dayKey(for: selectedDay)
         todayKeyAtLastRefresh = DailyNote.dayKey(for: Date())
-        if let page = repository.dailyNote(day: day) {
-            do {
-                let stored = try repository.load(id: page.id)
-                dailyID = page.id
-                dailyTemplateIsUntouched = false
-                setContent(stored.content, of: dailyEditor)
-            } catch {
-                showError(error.localizedDescription)
-            }
-        } else {
-            dailyID = UUID()
-            setContent(dailyEditor.listContent(from: DailyNote.template), of: dailyEditor)
-            dailyTemplateIsUntouched = true
+        tasksDirty = false
+        memoDirty = false
+        dailyTasksID = loadDailyPart(day: day, part: .tasks, into: dailyEditor) {
+            dailyEditor.listContent(from: [PastedLine(text: "", kind: .uncheckedChecklist, level: 0, isHeading: false)])
         }
+        dailyMemoID = loadDailyPart(day: day, part: .memo, into: dailyMemoEditor) { NSAttributedString() }
+        updateTasksTally()
+        relayoutEditors()
         refreshWeekStrip()
     }
 
-    /// A page left with only empty checkboxes is removed rather than kept, so the week's dots
-    /// mark only days that hold something.
+    private func loadDailyPart(
+        day: String,
+        part: DailyPart,
+        into target: RichTextView,
+        fresh: () -> NSAttributedString
+    ) -> UUID {
+        guard let page = repository.dailyNote(day: day, part: part) else {
+            setContent(fresh(), of: target)
+            return UUID()
+        }
+        do {
+            setContent(try repository.load(id: page.id).content, of: target)
+        } catch {
+            showError(error.localizedDescription)
+        }
+        return page.id
+    }
+
+    /// Tasks left with only empty checkboxes are removed rather than kept, so the calendar
+    /// marks only days that hold something.
     private func saveDaily() {
         dailyAutosaveTimer?.invalidate()
-        guard !suppressChanges, !dailyTemplateIsUntouched else { return }
-        let content = dailyEditor.attributedString()
+        guard !suppressChanges, tasksDirty || memoDirty else { return }
+        let day = DailyNote.dayKey(for: selectedDay)
         do {
-            try repository.save(
-                id: dailyID,
-                content: NoteContent.isBlankList(content, ignoring: DailyNote.templateHeadings)
-                    ? NSAttributedString()
-                    : content,
-                dailyDay: DailyNote.dayKey(for: selectedDay)
-            )
+            if tasksDirty {
+                let content = dailyEditor.attributedString()
+                try repository.save(
+                    id: dailyTasksID,
+                    content: NoteContent.isBlankList(content) ? NSAttributedString() : content,
+                    dailyDay: day,
+                    dailyPart: .tasks
+                )
+                tasksDirty = false
+            }
+            if memoDirty {
+                try repository.save(id: dailyMemoID, content: dailyMemoEditor.attributedString(), dailyDay: day, dailyPart: .memo)
+                memoDirty = false
+            }
             refreshWeekStrip()
         } catch {
             showError(error.localizedDescription)

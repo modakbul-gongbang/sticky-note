@@ -619,7 +619,7 @@ import Testing
         let saturday = try #require(Calendar.current.date(byAdding: .day, value: 1, to: friday))
 
         controller.selectDay(friday)
-        #expect(dayEditor.string == "할 일\n☐\t\n메모\n")
+        #expect(dayEditor.string == "☐\t")
         #expect(noteEditor.string == "일반 노트")
         controller.hidePanel()
         #expect(repository.dailyTaskCounts().isEmpty)
@@ -633,9 +633,9 @@ import Testing
         #expect(noteEditor.string == "일반 노트")
 
         controller.selectDay(saturday)
-        #expect(dayEditor.string == "할 일\n☐\t\n메모\n")
+        #expect(dayEditor.string == "☐\t")
         controller.selectDay(friday)
-        #expect(dayEditor.string == "할 일\n☐\t장보기\n메모\n")
+        #expect(dayEditor.string == "☐\t장보기")
     }
 
     @Test func pastedObsidianTasksReplaceTheEmptyCheckbox() throws {
@@ -653,7 +653,7 @@ import Testing
 
         dayEditor.setSelectedRange(NSRange(location: NSMaxRange((dayEditor.string as NSString).range(of: "☐\t")), length: 0))
         dayEditor.insertMarkdownPaste(pasted)
-        #expect(dayEditor.string == "할 일\nCore Tasks\n☐\tHide 런칭하기\n☑\t글 써보기\n메모\n")
+        #expect(dayEditor.string == "Core Tasks\n☐\tHide 런칭하기\n☑\t글 써보기")
         let headingStart = (dayEditor.string as NSString).range(of: "Core Tasks").location
         let headingFont = try #require(dayEditor.textStorage?.attribute(.font, at: headingStart, effectiveRange: nil) as? NSFont)
         #expect(NSFontManager.shared.traits(of: headingFont).contains(.boldFontMask))
@@ -706,11 +706,12 @@ import Testing
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let defaults = UserDefaults.standard
-        let saved = (defaults.object(forKey: "todayPane.height"), defaults.object(forKey: "todayPane.collapsed"))
+        let saved = (defaults.object(forKey: "dayPage.height"), defaults.object(forKey: "todayPane.collapsed"))
         defer {
-            defaults.set(saved.0, forKey: "todayPane.height")
+            defaults.set(saved.0, forKey: "dayPage.height")
             defaults.set(saved.1, forKey: "todayPane.collapsed")
         }
+        defaults.set(320.0, forKey: "dayPage.height")
 
         let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
         let window = try #require(controller.window)
@@ -759,6 +760,15 @@ import Testing
             #expect(abs(editor.frame.width - scroll.contentView.bounds.width) < 1)
             #expect(editor.frame.width < scroll.frame.width)
         }
+        // Resizing the window while zoomed must not widen the text past what is visible.
+        let window = try #require(controller.window)
+        window.setFrame(CGRect(x: 0, y: 0, width: 640, height: 900), display: false)
+        contentView.layoutSubtreeIfNeeded()
+        for editor in editors {
+            let clip = try #require(editor.enclosingScrollView?.contentView)
+            #expect(abs(editor.frame.width - clip.bounds.width) < 1)
+            #expect(clip.bounds.origin.x == 0)
+        }
         controller.resetZoom()
         #expect(editors.allSatisfy { $0.enclosingScrollView?.magnification == 1 })
     }
@@ -797,7 +807,85 @@ import Testing
         let other = try #require(cells.first { !$0.isToday && !$0.isOutsideMonth })
         _ = other.target?.perform(other.action, with: other)
         #expect(month.isHidden)
-        #expect(dayEditor.string == "할 일\n☐\t\n메모\n")
+        #expect(dayEditor.string == "☐\t")
+    }
+
+    @Test func zoomedEditorsKeepTheFrameTheLayoutManagerWouldGiveThem() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let savedZoom = UserDefaults.standard.object(forKey: "editor.zoom")
+        defer { UserDefaults.standard.set(savedZoom, forKey: "editor.zoom") }
+
+        let today = Date()
+        let repository = try NoteRepository(rootURL: root)
+        let manyTasks = (1...14).map { "☐\t할 일 \($0)" }.joined(separator: "\n")
+        try repository.save(id: UUID(), content: NSAttributedString(string: manyTasks), dailyDay: DailyNote.dayKey(for: today), dailyPart: .tasks)
+        try repository.save(id: UUID(), content: NSAttributedString(string: String(repeating: "긴 노트 줄\n", count: 60)))
+        let controller = StickyPanelController(repository: repository)
+        controller.resetZoom()
+        controller.zoomIn()
+        controller.zoomIn()
+        controller.openToday(now: today)
+        let contentView = try #require(controller.window?.contentView)
+        contentView.layoutSubtreeIfNeeded()
+
+        for editor in recursiveSubviews(of: contentView).compactMap({ $0 as? RichTextView }) {
+            let before = editor.frame
+            editor.requiredLayoutManager.textContainerChangedGeometry(editor.requiredTextContainer)
+            editor.requiredLayoutManager.ensureLayout(for: editor.requiredTextContainer)
+            #expect(editor.frame == before, "\(editor.accessibilityLabel() ?? "") resized itself after layout")
+        }
+        controller.resetZoom()
+    }
+
+    @Test func memoIsItsOwnSectionAndItsCheckboxesAreNotTasks() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let repository = try NoteRepository(rootURL: root)
+        let controller = StickyPanelController(repository: repository)
+        let contentView = try #require(controller.window?.contentView)
+        let descendants = recursiveSubviews(of: contentView)
+        let editors = descendants.compactMap { $0 as? RichTextView }
+        let tasks = try #require(editors.first { $0.accessibilityLabel() == "오늘 할 일 편집기" })
+        let memo = try #require(editors.first { $0.accessibilityLabel() == "오늘 메모 편집기" })
+        let tally = try #require(descendants.compactMap { $0 as? NSTextField }.first { $0.accessibilityLabel() == "완료한 할 일" })
+        let friday = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 23, hour: 9)))
+        let saturday = try #require(Calendar.current.date(byAdding: .day, value: 1, to: friday))
+        controller.selectDay(friday)
+        contentView.layoutSubtreeIfNeeded()
+        let tasksBox = try #require(tasks.enclosingScrollView).convert(try #require(tasks.enclosingScrollView).bounds, to: contentView)
+        let memoBox = try #require(memo.enclosingScrollView).convert(try #require(memo.enclosingScrollView).bounds, to: contentView)
+        #expect(memoBox.maxY <= tasksBox.minY)
+
+        func type(_ text: String, into editor: RichTextView) {
+            editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
+            editor.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+        }
+        type("장보기", into: tasks)
+        memo.insertListItem(.checkedChecklist)
+        type("메모 속 체크", into: memo)
+        controller.hidePanel()
+
+        #expect(repository.dailyTaskCounts() == ["2026-10-23": TaskCount(total: 1, done: 0)])
+        #expect(tally.stringValue == "0/1")
+        #expect(repository.dailyNote(day: "2026-10-23", part: .memo) != nil)
+
+        controller.selectDay(saturday)
+        #expect(memo.string.isEmpty)
+        #expect(tasks.string == "☐\t")
+        type("토요일 메모", into: memo)
+        controller.hidePanel()
+        #expect(repository.dailyTaskCounts()["2026-10-24"] == TaskCount(total: 0, done: 0))
+
+        controller.selectDay(friday)
+        #expect(memo.string == "☑\t메모 속 체크")
+        #expect(tasks.string == "☐\t장보기")
     }
 
     @Test func foldedDayPaneLeavesASummaryLineThatBringsItBack() throws {
@@ -806,11 +894,12 @@ import Testing
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let defaults = UserDefaults.standard
-        let saved = (defaults.object(forKey: "todayPane.height"), defaults.object(forKey: "todayPane.collapsed"))
+        let saved = (defaults.object(forKey: "dayPage.height"), defaults.object(forKey: "todayPane.collapsed"))
         defer {
-            defaults.set(saved.0, forKey: "todayPane.height")
+            defaults.set(saved.0, forKey: "dayPage.height")
             defaults.set(saved.1, forKey: "todayPane.collapsed")
         }
+        defaults.set(320.0, forKey: "dayPage.height")
 
         let today = Date()
         let repository = try NoteRepository(rootURL: root)
@@ -848,11 +937,12 @@ import Testing
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let defaults = UserDefaults.standard
-        let saved = (defaults.object(forKey: "todayPane.height"), defaults.object(forKey: "todayPane.collapsed"))
+        let saved = (defaults.object(forKey: "dayPage.height"), defaults.object(forKey: "todayPane.collapsed"))
         defer {
-            defaults.set(saved.0, forKey: "todayPane.height")
+            defaults.set(saved.0, forKey: "dayPage.height")
             defaults.set(saved.1, forKey: "todayPane.collapsed")
         }
+        defaults.set(320.0, forKey: "dayPage.height")
 
         let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
         let window = try #require(controller.window)

@@ -215,10 +215,6 @@ import Testing
         #expect(NoteContent.isBlankList(NSAttributedString(string: "☐\t\n☐\t  \n")))
         #expect(!NoteContent.isBlankList(NSAttributedString(string: "☐\t\n☐\t장보기")))
         #expect(!NoteContent.isBlankList(NSAttributedString(string: "메모")))
-        let untouchedTemplate = NSAttributedString(string: "할 일\n☐\t\n메모\n")
-        #expect(!NoteContent.isBlankList(untouchedTemplate))
-        #expect(NoteContent.isBlankList(untouchedTemplate, ignoring: DailyNote.templateHeadings))
-        #expect(!NoteContent.isBlankList(NSAttributedString(string: "할 일\n☐\t\n메모\n미팅 14시"), ignoring: DailyNote.templateHeadings))
     }
 
     @Test func obsidianDaySectionBecomesHeadingsAndNestedTasks() throws {

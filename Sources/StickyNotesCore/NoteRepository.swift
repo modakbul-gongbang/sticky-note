@@ -52,18 +52,23 @@ public final class NoteRepository {
 
     /// Daily pages live apart from the note list: `list` never returns them, and a day finds
     /// its own page here.
-    public func dailyNote(day: String) -> NoteMetadata? {
+    public func dailyNote(day: String, part: DailyPart = .tasks) -> NoteMetadata? {
         metadata
-            .filter { $0.dailyDay == day && !$0.isTrashed }
+            .filter { $0.dailyDay == day && ($0.dailyPart ?? .tasks) == part && !$0.isTrashed }
             .max { $0.modifiedAt < $1.modifiedAt }
     }
 
-    /// Every day that has a page, with its checklist tally read from the indexed text.
+    /// Every day that has a page, with the checklist tally of its tasks half; a day holding
+    /// only a memo appears with an empty tally.
     public func dailyTaskCounts() -> [String: TaskCount] {
         var counts: [String: TaskCount] = [:]
         for item in metadata where !item.isTrashed {
             guard let day = item.dailyDay else { continue }
-            counts[day] = TaskCount(text: item.searchText)
+            if (item.dailyPart ?? .tasks) == .tasks {
+                counts[day] = TaskCount(text: item.searchText)
+            } else if counts[day] == nil {
+                counts[day] = TaskCount(total: 0, done: 0)
+            }
         }
         return counts
     }
@@ -89,6 +94,7 @@ public final class NoteRepository {
         id: UUID,
         content: NSAttributedString,
         dailyDay: String? = nil,
+        dailyPart: DailyPart? = nil,
         modifiedAt: Date = Date()
     ) throws -> NoteMetadata? {
         if NoteContent.isEmpty(content) {
@@ -115,7 +121,8 @@ public final class NoteRepository {
                 modifiedAt: modifiedAt,
                 isTrashed: previousItem?.isTrashed ?? false,
                 storageName: newStorageName,
-                dailyDay: previousItem?.dailyDay ?? dailyDay
+                dailyDay: previousItem?.dailyDay ?? dailyDay,
+                dailyPart: previousItem?.dailyPart ?? dailyPart
             )
             metadata.removeAll { $0.id == id }
             metadata.append(item)

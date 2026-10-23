@@ -81,26 +81,55 @@ final class RichTextView: NSTextView {
             preconditionFailure("RichTextView must be installed in an NSScrollView")
         }
         scrollView.layoutSubtreeIfNeeded()
+        fitToClipView(scrollToDocumentStart: scrollToDocumentStart)
+    }
+
+    /// The document view follows its clip view itself instead of autoresizing: autoresizing
+    /// widens it by the clip view's change in window points, which overshoots once the scroll
+    /// view is magnified. Any resize - window, pane divider, zoom - refits it here.
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: nil)
+        guard let clipView = superview as? NSClipView else { return }
+        clipView.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(clipViewFrameDidChange),
+            name: NSView.frameDidChangeNotification,
+            object: clipView
+        )
+    }
+
+    @objc private func clipViewFrameDidChange() {
+        guard enclosingScrollView != nil else { return }
+        fitToClipView(scrollToDocumentStart: false)
+    }
+
+    private func fitToClipView(scrollToDocumentStart: Bool) {
+        guard let scrollView = enclosingScrollView else {
+            preconditionFailure("RichTextView must be installed in an NSScrollView")
+        }
         // The clip view's bounds are the visible document area, which shrinks as the scroll
         // view magnifies; wrapping to it keeps a zoomed note inside the window's width.
         let viewport = scrollView.contentView.bounds.size
         let previousOrigin = scrollView.contentView.bounds.origin
-        minSize = NSSize(width: 0, height: viewport.height)
+        // A magnified clip view's bounds are fractional (frame / zoom) and drift by rounding
+        // between passes; a whole-point floor keeps the minimum the same on every pass.
+        minSize = NSSize(width: 0, height: max(1, viewport.height.rounded(.down)))
         maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         requiredTextContainer.widthTracksTextView = true
         requiredTextContainer.containerSize = NSSize(
             width: max(viewport.width, 1),
             height: CGFloat.greatestFiniteMagnitude
         )
-        setFrameSize(NSSize(
-            width: max(viewport.width, 1),
-            height: max(frame.height, max(viewport.height, 1))
-        ))
+        setFrameSize(NSSize(width: max(viewport.width, 1), height: frame.height))
+        // Only the layout manager sizes this view: re-running its layout lets it apply the new
+        // minimum and content height itself. A height computed anywhere else differs by a
+        // rounding, and the layout manager then resizes the view on a later pass - which
+        // AppKit raises as an exception when that pass runs inside drawing.
+        requiredLayoutManager.textContainerChangedGeometry(requiredTextContainer)
         requiredLayoutManager.ensureLayout(for: requiredTextContainer)
-        let usedHeight = requiredLayoutManager.usedRect(for: requiredTextContainer).height
-            + textContainerInset.height * 2
-        let documentHeight = max(max(viewport.height, 1), ceil(usedHeight))
-        setFrameSize(NSSize(width: max(viewport.width, 1), height: documentHeight))
+        let documentHeight = frame.height
 
         if scrollToDocumentStart {
             setSelectedRange(NSRange(location: 0, length: 0))
@@ -202,6 +231,17 @@ final class RichTextView: NSTextView {
         listItemEditor.textDidChange()
         detectURLs()
         super.didChangeText()
+    }
+
+    /// A width change re-wraps the text, and the new height is only known once it is laid out
+    /// again. Laying out right here, while frames may still change, keeps drawing and cursor
+    /// rects from triggering that resize later - which AppKit raises as an exception.
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = newSize.width != frame.width
+        super.setFrameSize(newSize)
+        if widthChanged, let textContainer, let layoutManager {
+            layoutManager.ensureLayout(for: textContainer)
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
