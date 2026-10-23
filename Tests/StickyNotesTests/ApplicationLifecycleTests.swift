@@ -619,12 +619,12 @@ import Testing
         let saturday = try #require(Calendar.current.date(byAdding: .day, value: 1, to: friday))
 
         controller.selectDay(friday)
-        #expect(dayEditor.string == "☐\t")
+        #expect(dayEditor.string == "할 일\n☐\t\n메모\n")
         #expect(noteEditor.string == "일반 노트")
         controller.hidePanel()
         #expect(repository.dailyTaskCounts().isEmpty)
 
-        dayEditor.setSelectedRange(NSRange(location: dayEditor.string.utf16.count, length: 0))
+        dayEditor.setSelectedRange(NSRange(location: NSMaxRange((dayEditor.string as NSString).range(of: "☐\t")), length: 0))
         dayEditor.insertText("장보기", replacementRange: NSRange(location: NSNotFound, length: 0))
         controller.textDidChange(Notification(name: NSText.didChangeNotification, object: dayEditor))
         controller.hidePanel()
@@ -633,9 +633,9 @@ import Testing
         #expect(noteEditor.string == "일반 노트")
 
         controller.selectDay(saturday)
-        #expect(dayEditor.string == "☐\t")
+        #expect(dayEditor.string == "할 일\n☐\t\n메모\n")
         controller.selectDay(friday)
-        #expect(dayEditor.string == "☐\t장보기")
+        #expect(dayEditor.string == "할 일\n☐\t장보기\n메모\n")
     }
 
     @Test func pastedObsidianTasksReplaceTheEmptyCheckbox() throws {
@@ -651,10 +651,11 @@ import Testing
         })
         let pasted = try #require(MarkdownPaste.lines(from: "#### Core Tasks\n- [ ] Hide 런칭하기\n\t- [x] 글 써보기\n- [ ] "))
 
-        dayEditor.setSelectedRange(NSRange(location: dayEditor.string.utf16.count, length: 0))
+        dayEditor.setSelectedRange(NSRange(location: NSMaxRange((dayEditor.string as NSString).range(of: "☐\t")), length: 0))
         dayEditor.insertMarkdownPaste(pasted)
-        #expect(dayEditor.string == "Core Tasks\n☐\tHide 런칭하기\n☑\t글 써보기")
-        let headingFont = try #require(dayEditor.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        #expect(dayEditor.string == "할 일\nCore Tasks\n☐\tHide 런칭하기\n☑\t글 써보기\n메모\n")
+        let headingStart = (dayEditor.string as NSString).range(of: "Core Tasks").location
+        let headingFont = try #require(dayEditor.textStorage?.attribute(.font, at: headingStart, effectiveRange: nil) as? NSFont)
         #expect(NSFontManager.shared.traits(of: headingFont).contains(.boldFontMask))
         let childStyle = dayEditor.textStorage?.attribute(
             .paragraphStyle,
@@ -796,7 +797,92 @@ import Testing
         let other = try #require(cells.first { !$0.isToday && !$0.isOutsideMonth })
         _ = other.target?.perform(other.action, with: other)
         #expect(month.isHidden)
-        #expect(dayEditor.string == "☐\t")
+        #expect(dayEditor.string == "할 일\n☐\t\n메모\n")
+    }
+
+    @Test func foldedDayPaneLeavesASummaryLineThatBringsItBack() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = UserDefaults.standard
+        let saved = (defaults.object(forKey: "todayPane.height"), defaults.object(forKey: "todayPane.collapsed"))
+        defer {
+            defaults.set(saved.0, forKey: "todayPane.height")
+            defaults.set(saved.1, forKey: "todayPane.collapsed")
+        }
+
+        let today = Date()
+        let repository = try NoteRepository(rootURL: root)
+        try repository.save(
+            id: UUID(),
+            content: NSAttributedString(string: "할 일\n☑\t운동\n☐\t장보기\n☐\t글 쓰기"),
+            dailyDay: DailyNote.dayKey(for: today)
+        )
+        let controller = StickyPanelController(repository: repository)
+        let contentView = try #require(controller.window?.contentView)
+        let descendants = recursiveSubviews(of: contentView)
+        let pane = try #require(descendants.first { $0.accessibilityLabel() == "오늘 할 일" })
+        let summary = try #require(descendants.compactMap { $0 as? NSButton }.first {
+            $0.accessibilityLabel() == "오늘 할 일 펼치기"
+        })
+        controller.openToday(now: today)
+        #expect(summary.isHidden)
+
+        controller.toggleTodayPane()
+        contentView.layoutSubtreeIfNeeded()
+        #expect(pane.isHidden)
+        #expect(!summary.isHidden && summary.frame.height > 0)
+        #expect(summary.attributedTitle.string.contains(DailyNote.title(for: today)))
+        #expect(summary.attributedTitle.string.contains("할 일 1/3"))
+
+        _ = summary.target?.perform(summary.action, with: summary)
+        contentView.layoutSubtreeIfNeeded()
+        #expect(!pane.isHidden)
+        #expect(summary.isHidden)
+    }
+
+    @Test func pushingTheDividerToTheTopOrDoubleClickingItFoldsThePane() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = UserDefaults.standard
+        let saved = (defaults.object(forKey: "todayPane.height"), defaults.object(forKey: "todayPane.collapsed"))
+        defer {
+            defaults.set(saved.0, forKey: "todayPane.height")
+            defaults.set(saved.1, forKey: "todayPane.collapsed")
+        }
+
+        let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
+        let window = try #require(controller.window)
+        let contentView = try #require(window.contentView)
+        controller.openToday()
+        contentView.layoutSubtreeIfNeeded()
+        let descendants = recursiveSubviews(of: contentView)
+        let divider = try #require(descendants.compactMap { $0 as? PaneDivider }.first)
+        let pane = try #require(descendants.first { $0.accessibilityLabel() == "오늘 할 일" })
+        func mouse(_ type: NSEvent.EventType, y: CGFloat, clicks: Int = 1) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(
+                with: type, location: NSPoint(x: 200, y: y), modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1
+            ))
+        }
+        let heightBefore = pane.frame.height
+        let start = divider.convert(NSPoint(x: divider.bounds.midX, y: divider.bounds.midY), to: nil).y
+        divider.mouseDown(with: try mouse(.leftMouseDown, y: start))
+        divider.mouseDragged(with: try mouse(.leftMouseDragged, y: start + heightBefore))
+        divider.mouseUp(with: try mouse(.leftMouseUp, y: start + heightBefore))
+        contentView.layoutSubtreeIfNeeded()
+        #expect(pane.isHidden)
+
+        controller.toggleTodayPane()
+        contentView.layoutSubtreeIfNeeded()
+        #expect(!pane.isHidden)
+        #expect(pane.frame.height == heightBefore)
+
+        divider.mouseDown(with: try mouse(.leftMouseDown, y: start, clicks: 2))
+        #expect(pane.isHidden)
     }
 
     private func recursiveSubviews(of view: NSView) -> [NSView] {

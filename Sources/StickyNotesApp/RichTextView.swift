@@ -487,6 +487,10 @@ final class RichTextView: NSTextView {
         return accepted
     }
 
+    func listContent(from lines: [PastedLine]) -> NSAttributedString {
+        listItemEditor.content(from: lines)
+    }
+
     /// Pasted lines are whole paragraphs: on an empty line, or an empty list row such as a fresh
     /// checkbox, they replace it; anywhere else they start on a line of their own.
     func insertMarkdownPaste(_ lines: [PastedLine]) {

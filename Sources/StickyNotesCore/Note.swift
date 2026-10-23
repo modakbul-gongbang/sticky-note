@@ -76,7 +76,7 @@ public enum NoteContent {
 
     /// True when every line is blank or a list marker with nothing after it - a page that
     /// holds only the empty checkbox it was opened with.
-    public static func isBlankList(_ content: NSAttributedString) -> Bool {
+    public static func isBlankList(_ content: NSAttributedString, ignoring headings: Set<String> = []) -> Bool {
         guard isEmpty(content) == false else { return true }
         var hasAttachment = false
         content.enumerateAttribute(.attachment, in: NSRange(location: 0, length: content.length)) { value, _, stop in
@@ -85,7 +85,8 @@ public enum NoteContent {
         guard !hasAttachment else { return false }
         return content.string.components(separatedBy: .newlines).allSatisfy { line in
             let body = ListItemSyntax.match(in: line).map { String(line.utf16.dropFirst($0.prefixLength)) ?? "" } ?? line
-            return body.trimmingCharacters(in: .whitespaces).isEmpty
+            let trimmed = body.trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty || headings.contains(trimmed)
         }
     }
 
@@ -163,6 +164,16 @@ public enum DailyNote {
             return day
         }
     }
+
+    /// A fresh day page: a tasks heading with one empty checkbox, then a memo heading with an
+    /// empty line under it. The headings are ordinary text the user may rename or delete.
+    public static let templateHeadings: Set<String> = ["할 일", "메모"]
+    public static let template: [PastedLine] = [
+        PastedLine(text: "할 일", kind: nil, level: 0, isHeading: true),
+        PastedLine(text: "", kind: .uncheckedChecklist, level: 0, isHeading: false),
+        PastedLine(text: "메모", kind: nil, level: 0, isHeading: true),
+        PastedLine(text: "", kind: nil, level: 0, isHeading: false),
+    ]
 
     public static func title(for date: Date, calendar: Calendar = .current) -> String {
         let formatter = DateFormatter()

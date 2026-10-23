@@ -68,6 +68,11 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private var dailyAutosaveTimer: Timer?
     private weak var lastFocusedEditor: RichTextView?
     private weak var todayToggleButton: NSButton?
+    /// While the pane is folded away this one line stays under the header - the day and its
+    /// tally - so the hidden state is visible and one click brings the pane back.
+    private let collapsedSummary = NSButton(title: "", target: nil, action: nil)
+    private lazy var collapsedSummaryHeight = collapsedSummary.heightAnchor.constraint(equalToConstant: 0)
+    private var dragCollapsedPane = false
     private var rows: [NoteMetadata] = []
     private var autosaveTimer: Timer?
     private var errorTimer: Timer?
@@ -150,7 +155,17 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             selectDay(now)
         }
         panel.makeFirstResponder(dailyEditor)
-        dailyEditor.setSelectedRange(NSRange(location: dailyEditor.string.utf16.count, length: 0))
+        placeDailyCaret()
+    }
+
+    /// A fresh page puts the caret on its empty checkbox; a written page at its end.
+    private func placeDailyCaret() {
+        let text = dailyEditor.string as NSString
+        let checkbox = text.range(of: ListItemKind.uncheckedChecklist.prefix)
+        let location = dailyTemplateIsUntouched && checkbox.location != NSNotFound
+            ? NSMaxRange(checkbox)
+            : text.length
+        dailyEditor.setSelectedRange(NSRange(location: location, length: 0))
     }
 
     @objc func toggleTodayPane() {
@@ -506,6 +521,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         configureErrorLabel()
         configureWordCountLabel()
         root.addSubview(editorScroll)
+        root.addSubview(collapsedSummary)
         root.addSubview(todayPane)
         root.addSubview(paneDivider)
         root.addSubview(header)
@@ -526,7 +542,11 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             header.heightAnchor.constraint(equalToConstant: 36),
-            todayPane.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
+            collapsedSummary.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
+            collapsedSummary.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            collapsedSummary.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            collapsedSummaryHeight,
+            todayPane.topAnchor.constraint(equalTo: collapsedSummary.bottomAnchor),
             todayPane.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             todayPane.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             todayPaneHeight,
@@ -633,11 +653,23 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         paneDivider.onDragBegan = { [weak self] in
             guard let self else { return }
             dragStartTodayPaneHeight = todayPaneHeight.constant
+            dragCollapsedPane = false
         }
+        // Pushing the divider well past the pane's smallest height folds the pane away,
+        // keeping the height it had for when it comes back.
         paneDivider.onDrag = { [weak self] distance in
-            guard let self else { return }
-            setTodayPaneHeight(dragStartTodayPaneHeight + distance)
+            guard let self, !dragCollapsedPane else { return }
+            let proposed = dragStartTodayPaneHeight + distance
+            if proposed < minimumTodayPaneHeight - 48 {
+                dragCollapsedPane = true
+                setTodayPaneCollapsed(true)
+                panel.makeFirstResponder(editor)
+            } else {
+                setTodayPaneHeight(proposed)
+            }
         }
+        paneDivider.onDoubleClick = { [weak self] in self?.toggleTodayPane() }
+        configureCollapsedSummary()
         NSLayoutConstraint.activate([
             weekStrip.topAnchor.constraint(equalTo: todayPane.topAnchor, constant: 2),
             weekStrip.leadingAnchor.constraint(equalTo: todayPane.leadingAnchor, constant: 12),
@@ -698,8 +730,55 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         return stored > 0 ? stored : 220
     }
 
+    private func configureCollapsedSummary() {
+        collapsedSummary.translatesAutoresizingMaskIntoConstraints = false
+        collapsedSummary.isBordered = false
+        collapsedSummary.wantsLayer = true
+        collapsedSummary.layer?.cornerRadius = 9
+        collapsedSummary.layer?.backgroundColor = NSColor(calibratedWhite: 0.1, alpha: 1).cgColor
+        collapsedSummary.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)
+        collapsedSummary.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        collapsedSummary.imagePosition = .imageTrailing
+        collapsedSummary.contentTintColor = NSColor(calibratedWhite: 0.55, alpha: 1)
+        collapsedSummary.alignment = .center
+        collapsedSummary.target = self
+        collapsedSummary.action = #selector(toggleTodayPane)
+        collapsedSummary.setAccessibilityLabel("오늘 할 일 펼치기")
+        collapsedSummary.toolTip = "오늘 할 일 펼치기 (⌘⇧T)"
+        collapsedSummary.isHidden = true
+    }
+
+    private func updateCollapsedSummary() {
+        let grey = NSColor(calibratedWhite: 0.6, alpha: 1)
+        let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        let title = NSMutableAttributedString(string: DailyNote.title(for: selectedDay), attributes: [
+            .font: font, .foregroundColor: NSColor(calibratedWhite: 0.85, alpha: 1),
+        ])
+        let count = repository.dailyTaskCounts()[DailyNote.dayKey(for: selectedDay)]
+        let tally: NSAttributedString
+        if let count, count.total > 0 {
+            let text = NSMutableAttributedString(string: "   할 일 ", attributes: [.font: font, .foregroundColor: grey])
+            text.append(NSAttributedString(string: "\(count.done)", attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold),
+                .foregroundColor: count.done > 0 ? accentColor : grey,
+            ]))
+            text.append(NSAttributedString(string: "/\(count.total)  ", attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold),
+                .foregroundColor: count.done == count.total ? accentColor : grey,
+            ]))
+            tally = text
+        } else {
+            tally = NSAttributedString(string: "   할 일 없음  ", attributes: [.font: font, .foregroundColor: grey])
+        }
+        title.append(tally)
+        collapsedSummary.attributedTitle = title
+    }
+
     private func setTodayPaneCollapsed(_ collapsed: Bool) {
         if collapsed, !monthCalendar.isHidden { setMonthCalendarShown(false) }
+        collapsedSummary.isHidden = !collapsed
+        collapsedSummaryHeight.constant = collapsed ? 34 : 0
+        if collapsed { updateCollapsedSummary() }
         todayPane.isHidden = collapsed
         paneDivider.isHidden = collapsed
         todayPaneHeight.constant = collapsed ? 0 : clampedTodayPaneHeight(storedTodayPaneHeight)
@@ -761,7 +840,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         let closeButton = toolbarButton(symbol: "xmark", label: "노트 숨기기", action: #selector(hidePanel))
         closeButton.toolTip = "숨기기 (⌘Q)"
         let todayButton = toolbarButton(symbol: "calendar", label: "오늘 할 일 펼치기 또는 접기", action: #selector(toggleTodayPane))
-        todayButton.toolTip = "오늘 할 일 펼치기/접기 (⌥⇧`로 바로 열기)"
+        todayButton.toolTip = "오늘 할 일 펼치기/접기 (⌘⇧T, ⌥⇧`로 바로 열기)"
         todayToggleButton = todayButton
         let header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
@@ -1332,11 +1411,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             }
         } else {
             dailyID = UUID()
-            setContent(NSAttributedString(), of: dailyEditor)
-            suppressChanges = true
-            dailyEditor.insertListItem(.uncheckedChecklist)
-            dailyEditor.resetUndoHistory()
-            suppressChanges = false
+            setContent(dailyEditor.listContent(from: DailyNote.template), of: dailyEditor)
             dailyTemplateIsUntouched = true
         }
         refreshWeekStrip()
@@ -1351,7 +1426,9 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         do {
             try repository.save(
                 id: dailyID,
-                content: NoteContent.isBlankList(content) ? NSAttributedString() : content,
+                content: NoteContent.isBlankList(content, ignoring: DailyNote.templateHeadings)
+                    ? NSAttributedString()
+                    : content,
                 dailyDay: DailyNote.dayKey(for: selectedDay)
             )
             refreshWeekStrip()
@@ -1362,6 +1439,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     private func refreshWeekStrip() {
         weekStrip.show(selected: selectedDay, today: Date(), taskCounts: repository.dailyTaskCounts())
+        if todayPane.isHidden { updateCollapsedSummary() }
     }
 
     private func followDayRollover(now: Date) {

@@ -5,6 +5,7 @@ import AppKit
 final class PaneDivider: NSView {
     var onDragBegan: (() -> Void)?
     var onDrag: ((CGFloat) -> Void)?
+    var onDoubleClick: (() -> Void)?
     private var dragStartY: CGFloat?
 
     /// The panel moves when its background is dragged; the divider is the one strip of
@@ -27,6 +28,11 @@ final class PaneDivider: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            dragStartY = nil
+            onDoubleClick?()
+            return
+        }
         dragStartY = event.locationInWindow.y
         onDragBegan?()
     }
