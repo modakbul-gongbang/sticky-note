@@ -16,6 +16,12 @@ final class DismissiblePanel: NSPanel {
     }
 }
 
+/// Each SF Symbol carries its own alignment insets, so symbols centred by Auto Layout would sit
+/// a point apart in one row; a toolbar button aligns by its whole square instead.
+final class ToolbarButton: NSButton {
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
+}
+
 final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     private let repository: NoteRepository
     private let panel: DismissiblePanel
@@ -43,11 +49,11 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private lazy var monthCalendar = MonthCalendarView(accentColor: accentColor)
     /// Height the month grid needs; while it is open the pane grows to at least this much
     /// and returns to the user's own height when it closes.
-    private let monthCalendarHeight: CGFloat = 300
+    private let monthCalendarHeight: CGFloat = 330
     private let zoomSteps: [CGFloat] = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6]
     private lazy var todayPaneHeight = todayPane.heightAnchor.constraint(equalToConstant: storedTodayPaneHeight)
     private lazy var dividerHeight = paneDivider.heightAnchor.constraint(equalToConstant: dividerThickness)
-    private let dividerThickness: CGFloat = 11
+    private let dividerThickness: CGFloat = 16
     private let minimumTodayPaneHeight: CGFloat = 112
     private let minimumNoteHeight: CGFloat = 150
     private var dragStartTodayPaneHeight: CGFloat = 0
@@ -519,7 +525,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             header.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
             header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            header.heightAnchor.constraint(equalToConstant: 34),
+            header.heightAnchor.constraint(equalToConstant: 36),
             todayPane.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
             todayPane.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             todayPane.trailingAnchor.constraint(equalTo: root.trailingAnchor),
@@ -716,7 +722,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     /// The note below always keeps a usable height; the pane gives way when the window shrinks.
     private func clampedTodayPaneHeight(_ height: CGFloat) -> CGFloat {
         let windowHeight = panel.contentView?.bounds.height ?? panel.frame.height
-        let ceiling = max(minimumTodayPaneHeight, windowHeight - 44 - dividerThickness - 48 - minimumNoteHeight)
+        let ceiling = max(minimumTodayPaneHeight, windowHeight - 50 - dividerThickness - 48 - minimumNoteHeight)
         return min(max(height, minimumTodayPaneHeight), ceiling)
     }
 
@@ -803,25 +809,26 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         let button = NSButton(title: "T", target: self, action: #selector(toggleFormatOverlay))
         formatToggleButton = button
         button.isBordered = false
-        button.font = .systemFont(ofSize: 17, weight: .medium)
+        button.font = .systemFont(ofSize: 19, weight: .medium)
         button.contentTintColor = NSColor(calibratedWhite: 0.68, alpha: 1)
         button.translatesAutoresizingMaskIntoConstraints = false
         button.setAccessibilityLabel("서식 메뉴 열기 또는 닫기")
         button.toolTip = "서식 메뉴 열기/닫기 (⌘⇧F)"
-        button.widthAnchor.constraint(equalToConstant: 28).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        button.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 36).isActive = true
         return button
     }
 
     private func toolbarButton(symbol: String, label: String, action: Selector) -> NSButton {
-        let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: self, action: action)
+        let button = ToolbarButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: self, action: action)
+        button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
         button.isBordered = false
         button.imagePosition = .imageOnly
         button.contentTintColor = NSColor(calibratedWhite: 0.64, alpha: 1)
         button.translatesAutoresizingMaskIntoConstraints = false
         button.setAccessibilityLabel(label)
-        button.widthAnchor.constraint(equalToConstant: 28).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        button.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 36).isActive = true
         return button
     }
 

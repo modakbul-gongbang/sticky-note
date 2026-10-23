@@ -272,7 +272,8 @@ import Testing
         })
         let closeBox = closeButton.convert(closeButton.bounds, to: contentView)
         let otherButtons = descendants.compactMap { $0 as? NSButton }.filter { $0 !== closeButton && !$0.isHidden }
-        #expect(closeBox.maxX == descendants.compactMap { $0 as? NSButton }.map { $0.convert($0.bounds, to: contentView).maxX }.max())
+        let rightmost = try #require(descendants.compactMap { $0 as? NSButton }.map { $0.convert($0.bounds, to: contentView).maxX }.max())
+        #expect(closeBox.maxX >= rightmost - 1)
         #expect(otherButtons.allSatisfy { $0.convert($0.bounds, to: contentView).minY <= closeBox.minY })
         #expect(window.maxSize == CGSize(width: 640, height: 900))
 

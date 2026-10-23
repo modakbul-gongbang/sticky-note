@@ -28,7 +28,10 @@ final class DayButton: NSButton {
                 .paragraphStyle: centered,
             ]).draw(in: NSRect(x: 0, y: 3, width: bounds.width, height: 13))
         }
-        let numberCenter = NSPoint(x: bounds.midX, y: weekdayText == nil ? bounds.midY : bounds.height - 18)
+        // The date sits above its tally; a day without tasks keeps the number centred.
+        let hasTally = (taskCount?.total ?? 0) > 0
+        let top: CGFloat = weekdayText == nil ? 0 : 16
+        let numberY = top + (bounds.height - top) / 2 - (hasTally ? 15 : 9)
         let dayColor: NSColor
         if isToday {
             dayColor = accentColor
@@ -38,34 +41,36 @@ final class DayButton: NSButton {
             dayColor = NSColor(calibratedWhite: isSelectedDay ? 0.96 : 0.66, alpha: 1)
         }
         NSAttributedString(string: dayText, attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: isSelectedDay || isToday ? .semibold : .regular),
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 14, weight: isSelectedDay || isToday ? .semibold : .regular),
             .foregroundColor: dayColor,
             .paragraphStyle: centered,
-        ]).draw(in: NSRect(x: 0, y: numberCenter.y - 8.5, width: bounds.width, height: 17))
-        drawTaskMark(around: numberCenter)
+        ]).draw(in: NSRect(x: 0, y: numberY, width: bounds.width, height: 18))
+        drawTally(below: numberY + 18, centered: centered)
     }
 
-    private func drawTaskMark(around center: NSPoint) {
+    /// "done/total" under the date: the done count in accent, the total in grey, and the whole
+    /// tally in accent once every task is checked. Text with content but no tasks gets a dot.
+    private func drawTally(below y: CGFloat, centered: NSParagraphStyle) {
         guard let taskCount else { return }
-        let radius: CGFloat = 12
         guard taskCount.total > 0 else {
             NSColor(calibratedWhite: 0.5, alpha: 1).setFill()
-            NSBezierPath(ovalIn: NSRect(x: center.x - 2, y: center.y + radius + 1, width: 4, height: 4)).fill()
+            NSBezierPath(ovalIn: NSRect(x: bounds.midX - 2, y: y + 2, width: 4, height: 4)).fill()
             return
         }
-        let track = NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
-        track.lineWidth = 1.5
-        NSColor(calibratedWhite: 0.26, alpha: 1).setStroke()
-        track.stroke()
-        guard taskCount.done > 0 else { return }
-        let arc = NSBezierPath()
-        let fraction = CGFloat(taskCount.done) / CGFloat(taskCount.total)
-        // In flipped coordinates increasing angles run clockwise on screen, from 12 o'clock.
-        arc.appendArc(withCenter: center, radius: radius, startAngle: -90, endAngle: -90 + 360 * fraction, clockwise: false)
-        arc.lineWidth = 2
-        arc.lineCapStyle = .round
-        accentColor.setStroke()
-        arc.stroke()
+        let finished = taskCount.done == taskCount.total
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
+        let grey = NSColor(calibratedWhite: 0.5, alpha: 1)
+        let tally = NSMutableAttributedString(string: "\(taskCount.done)", attributes: [
+            .font: font,
+            .foregroundColor: taskCount.done > 0 ? accentColor : grey,
+            .paragraphStyle: centered,
+        ])
+        tally.append(NSAttributedString(string: "/\(taskCount.total)", attributes: [
+            .font: font,
+            .foregroundColor: finished ? accentColor : grey,
+            .paragraphStyle: centered,
+        ]))
+        tally.draw(in: NSRect(x: 0, y: y, width: bounds.width, height: 14))
     }
 
     func configure(day: Date, weekday: String?, selected: Date, today: Date, taskCount: TaskCount?, outsideMonth: Bool) {
@@ -88,7 +93,8 @@ private func chevronButton(symbol: String, label: String, target: AnyObject, act
     button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
     button.imagePosition = .imageOnly
     button.isBordered = false
-    button.contentTintColor = NSColor(calibratedWhite: 0.45, alpha: 1)
+    button.contentTintColor = NSColor(calibratedWhite: 0.55, alpha: 1)
+    button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
     button.target = target
     button.action = action
     button.setAccessibilityLabel(label)
@@ -112,7 +118,7 @@ final class WeekStripView: NSView {
         let previous = chevronButton(symbol: "chevron.left", label: "지난주", target: self, action: #selector(showPreviousWeek))
         let next = chevronButton(symbol: "chevron.right", label: "다음 주", target: self, action: #selector(showNextWeek))
         let month = chevronButton(symbol: "chevron.compact.down", label: "월 달력 보기", target: self, action: #selector(showMonth))
-        for button in [previous, next] { button.widthAnchor.constraint(equalToConstant: 18).isActive = true }
+        for button in [previous, next] { button.widthAnchor.constraint(equalToConstant: 30).isActive = true }
         for (index, button) in dayButtons.enumerated() {
             button.isBordered = false
             button.tag = index
@@ -132,11 +138,11 @@ final class WeekStripView: NSView {
             row.topAnchor.constraint(equalTo: topAnchor),
             row.leadingAnchor.constraint(equalTo: leadingAnchor),
             row.trailingAnchor.constraint(equalTo: trailingAnchor),
-            row.heightAnchor.constraint(equalToConstant: 50),
+            row.heightAnchor.constraint(equalToConstant: 56),
             month.topAnchor.constraint(equalTo: row.bottomAnchor),
             month.centerXAnchor.constraint(equalTo: centerXAnchor),
-            month.widthAnchor.constraint(equalToConstant: 40),
-            month.heightAnchor.constraint(equalToConstant: 12),
+            month.widthAnchor.constraint(equalToConstant: 120),
+            month.heightAnchor.constraint(equalToConstant: 20),
             month.bottomAnchor.constraint(equalTo: bottomAnchor),
         ] + dayButtons.dropFirst().map { $0.widthAnchor.constraint(equalTo: dayButtons[0].widthAnchor) }
           + dayButtons.map { $0.heightAnchor.constraint(equalTo: row.heightAnchor) })
@@ -194,13 +200,17 @@ final class MonthCalendarView: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         setAccessibilityLabel("월 달력")
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         titleLabel.textColor = NSColor(calibratedWhite: 0.82, alpha: 1)
         titleLabel.alignment = .center
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         let previous = chevronButton(symbol: "chevron.left", label: "지난달", target: self, action: #selector(showPreviousMonth))
         let next = chevronButton(symbol: "chevron.right", label: "다음 달", target: self, action: #selector(showNextMonth))
         let close = chevronButton(symbol: "chevron.compact.up", label: "주 보기로 돌아가기", target: self, action: #selector(close))
+        for button in [previous, next] {
+            button.widthAnchor.constraint(equalToConstant: 32).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        }
         let header = NSStackView(views: [previous, titleLabel, next])
         header.orientation = .horizontal
         header.spacing = 12
@@ -244,7 +254,7 @@ final class MonthCalendarView: NSView {
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             header.centerXAnchor.constraint(equalTo: centerXAnchor),
-            header.heightAnchor.constraint(equalToConstant: 22),
+            header.heightAnchor.constraint(equalToConstant: 30),
             weekdays.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
             weekdays.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
             weekdays.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
@@ -254,8 +264,8 @@ final class MonthCalendarView: NSView {
             grid.trailingAnchor.constraint(equalTo: weekdays.trailingAnchor),
             grid.bottomAnchor.constraint(equalTo: close.topAnchor),
             close.centerXAnchor.constraint(equalTo: centerXAnchor),
-            close.widthAnchor.constraint(equalToConstant: 40),
-            close.heightAnchor.constraint(equalToConstant: 12),
+            close.widthAnchor.constraint(equalToConstant: 120),
+            close.heightAnchor.constraint(equalToConstant: 20),
             close.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }
