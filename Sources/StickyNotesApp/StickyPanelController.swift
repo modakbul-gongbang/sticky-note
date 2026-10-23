@@ -22,6 +22,14 @@ final class ToolbarButton: NSButton {
     override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
 }
 
+/// What the window shows: only the day (week, tasks, memo), the day above the note, or only
+/// the note with a one-line summary of the day.
+enum ViewMode: String, CaseIterable {
+    case today
+    case both
+    case notes
+}
+
 final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     private let repository: NoteRepository
     private let panel: DismissiblePanel
@@ -78,7 +86,10 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     private var memoDirty = false
     private var dailyAutosaveTimer: Timer?
     private weak var lastFocusedEditor: RichTextView?
-    private weak var todayToggleButton: NSButton?
+    private let viewModeControl = NSSegmentedControl(labels: ["오늘", "함께", "노트"], trackingMode: .selectOne, target: nil, action: nil)
+    private(set) var viewMode: ViewMode = .both
+    /// While only the day shows, the pane runs down to the footer instead of keeping its height.
+    private var todayPaneFillsWindow: NSLayoutConstraint?
     /// While the pane is folded away this one line stays under the header - the day and its
     /// tally - so the hidden state is visible and one click brings the pane back.
     private let collapsedSummary = NSButton(title: "", target: nil, action: nil)
@@ -149,7 +160,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     /// The today shortcut mirrors Option+`: pressed while writing on today's page it hides the
     /// panel, anywhere else it brings the panel up with the cursor on today's page.
     func toggleTodayOnCurrentScreen(now: Date = Date()) {
-        if panel.isVisible, panel.isKeyWindow, !todayPane.isHidden,
+        if panel.isVisible, panel.isKeyWindow, viewMode != .notes,
            lastFocusedEditor === dailyEditor || lastFocusedEditor === dailyMemoEditor,
            DailyNote.dayKey(for: selectedDay) == DailyNote.dayKey(for: now) {
             hidePanel()
@@ -160,7 +171,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     func openToday(now: Date = Date()) {
-        setTodayPaneCollapsed(false)
+        if viewMode == .notes { setViewMode(.both) }
         setMonthCalendarShown(false)
         if DailyNote.dayKey(for: selectedDay) != DailyNote.dayKey(for: now) {
             selectDay(now)
@@ -174,10 +185,52 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         dailyEditor.setSelectedRange(NSRange(location: dailyEditor.string.utf16.count, length: 0))
     }
 
+    /// The summary line and a double-click on the divider fold the day away or bring it back.
     @objc func toggleTodayPane() {
-        let collapsing = !todayPane.isHidden
-        setTodayPaneCollapsed(collapsing)
-        panel.makeFirstResponder(collapsing ? editor : dailyEditor)
+        setViewMode(viewMode == .notes ? .both : .notes)
+    }
+
+    @objc func showTodayOnly() { setViewMode(.today) }
+    @objc func showTodayAndNotes() { setViewMode(.both) }
+    @objc func showNotesOnly() { setViewMode(.notes) }
+
+    @objc private func viewModeChanged() {
+        setViewMode(ViewMode.allCases[viewModeControl.selectedSegment])
+    }
+
+    func setViewMode(_ mode: ViewMode) {
+        viewMode = mode
+        viewModeControl.selectedSegment = ViewMode.allCases.firstIndex(of: mode) ?? 1
+        UserDefaults.standard.set(mode.rawValue, forKey: "viewMode")
+        if mode == .notes, !monthCalendar.isHidden { setMonthCalendarShown(false) }
+
+        let showsDay = mode != .notes
+        let showsNote = mode != .today
+        collapsedSummary.isHidden = showsDay
+        collapsedSummaryHeight.constant = showsDay ? 0 : 34
+        if !showsDay { updateCollapsedSummary() }
+        todayPane.isHidden = !showsDay
+        paneDivider.isHidden = mode != .both
+        dividerHeight.constant = mode == .both ? dividerThickness : 0
+        editor.enclosingScrollView?.isHidden = !showsNote
+        wordCountLabel.isHidden = !showsNote
+        todayPaneFillsWindow?.isActive = mode == .today
+        todayPaneHeight.isActive = mode != .today
+        todayPaneHeight.constant = mode == .notes ? 0 : clampedTodayPaneHeight(
+            monthCalendar.isHidden ? storedTodayPaneHeight : max(storedTodayPaneHeight, monthCalendarHeight)
+        )
+        relayoutEditors()
+        updateTitle()
+        switch mode {
+        case .today: panel.makeFirstResponder(dailyEditor)
+        case .notes: panel.makeFirstResponder(editor)
+        case .both: panel.makeFirstResponder(activeEditor)
+        }
+    }
+
+    /// Note commands bring the note into view when only the day is showing.
+    private func revealNotes() {
+        if viewMode == .today { setViewMode(.both) }
     }
 
     func selectDay(_ date: Date) {
@@ -194,6 +247,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     @objc func newNote() {
+        revealNotes()
         saveNow()
         noteCycle.removeAll()
         showingTrash = false
@@ -407,7 +461,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         closeOverlays(focusEditor: false)
     }
     func windowDidResize(_ notification: Notification) {
-        if !todayPane.isHidden {
+        if viewMode == .both {
             todayPaneHeight.constant = clampedTodayPaneHeight(
                 monthCalendar.isHidden ? storedTodayPaneHeight : max(storedTodayPaneHeight, monthCalendarHeight)
             )
@@ -483,6 +537,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         guard !isRefreshingRows else { return }
         let index = tableView.selectedRow
         guard index >= 0, index < rows.count, rows[index].id != currentID else { return }
+        revealNotes()
         noteCycle.removeAll()
         saveNow()
         loadNote(id: rows[index].id)
@@ -545,6 +600,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         root.addSubview(errorLabel)
         root.addSubview(wordCountLabel)
         root.addSubview(formatButton)
+        configureViewModeControl()
+        root.addSubview(viewModeControl)
 
         sidebar.isHidden = true
         formatOverlay.isHidden = true
@@ -590,12 +647,16 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             formatButton.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
             wordCountLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
             wordCountLabel.centerYAnchor.constraint(equalTo: formatButton.centerYAnchor),
+            viewModeControl.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            viewModeControl.centerYAnchor.constraint(equalTo: formatButton.centerYAnchor),
             errorLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            errorLabel.centerYAnchor.constraint(equalTo: formatButton.centerYAnchor),
+            errorLabel.bottomAnchor.constraint(equalTo: viewModeControl.topAnchor, constant: -8),
             errorLabel.heightAnchor.constraint(equalToConstant: 26),
             errorLabel.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -180),
         ])
-        setTodayPaneCollapsed(UserDefaults.standard.bool(forKey: "todayPane.collapsed"))
+        todayPaneFillsWindow = todayPane.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -48)
+        let storedMode = UserDefaults.standard.string(forKey: "viewMode").flatMap(ViewMode.init(rawValue:))
+        setViewMode(storedMode ?? .both)
         for scroll in [editorScroll, dailyScroll, dailyMemoScroll] {
             scroll.allowsMagnification = false
             scroll.minMagnification = zoomSteps[0]
@@ -671,15 +732,17 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             dragStartTodayPaneHeight = todayPaneHeight.constant
             dragCollapsedPane = false
         }
-        // Pushing the divider well past the pane's smallest height folds the pane away,
-        // keeping the height it had for when it comes back.
+        // Pushing the divider well past either end switches to that side alone - up for only
+        // the note, down for only the day - keeping the height for when both come back.
         paneDivider.onDrag = { [weak self] distance in
             guard let self, !dragCollapsedPane else { return }
             let proposed = dragStartTodayPaneHeight + distance
             if proposed < minimumTodayPaneHeight - 48 {
                 dragCollapsedPane = true
-                setTodayPaneCollapsed(true)
-                panel.makeFirstResponder(editor)
+                setViewMode(.notes)
+            } else if proposed > clampedTodayPaneHeight(.greatestFiniteMagnitude) + 48 {
+                dragCollapsedPane = true
+                setViewMode(.today)
             } else {
                 setTodayPaneHeight(proposed)
             }
@@ -699,6 +762,19 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             monthCalendar.trailingAnchor.constraint(equalTo: todayPane.trailingAnchor, constant: -12),
             monthCalendar.bottomAnchor.constraint(equalTo: todayPane.bottomAnchor, constant: -4),
         ])
+    }
+
+    private func configureViewModeControl() {
+        viewModeControl.translatesAutoresizingMaskIntoConstraints = false
+        viewModeControl.target = self
+        viewModeControl.action = #selector(viewModeChanged)
+        viewModeControl.selectedSegmentBezelColor = accentColor
+        viewModeControl.font = .systemFont(ofSize: 12, weight: .medium)
+        viewModeControl.setAccessibilityLabel("보기 전환")
+        for (index, tip) in ["오늘만 보기 (⌘1)", "오늘과 노트 함께 보기 (⌘2)", "노트만 보기 (⌘3)"].enumerated() {
+            viewModeControl.setToolTip(tip, forSegment: index)
+            viewModeControl.setWidth(54, forSegment: index)
+        }
     }
 
     private func configureDayPage() {
@@ -777,7 +853,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
 
     func setMonthCalendarShown(_ shown: Bool) {
         if shown {
-            setTodayPaneCollapsed(false)
+            if viewMode == .notes { setViewMode(.both) }
             monthCalendar.show(selected: selectedDay, today: Date(), taskCounts: repository.dailyTaskCounts())
             todayPaneHeight.constant = clampedTodayPaneHeight(max(storedTodayPaneHeight, monthCalendarHeight))
         } else if !todayPane.isHidden {
@@ -834,7 +910,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         collapsedSummary.target = self
         collapsedSummary.action = #selector(toggleTodayPane)
         collapsedSummary.setAccessibilityLabel("오늘 할 일 펼치기")
-        collapsedSummary.toolTip = "오늘 할 일 펼치기 (⌘⇧T)"
+        collapsedSummary.toolTip = "오늘 할 일 펼치기 (⌘2)"
         collapsedSummary.isHidden = true
     }
 
@@ -864,24 +940,8 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         collapsedSummary.attributedTitle = title
     }
 
-    private func setTodayPaneCollapsed(_ collapsed: Bool) {
-        if collapsed, !monthCalendar.isHidden { setMonthCalendarShown(false) }
-        collapsedSummary.isHidden = !collapsed
-        collapsedSummaryHeight.constant = collapsed ? 34 : 0
-        if collapsed { updateCollapsedSummary() }
-        todayPane.isHidden = collapsed
-        paneDivider.isHidden = collapsed
-        todayPaneHeight.constant = collapsed ? 0 : clampedTodayPaneHeight(storedTodayPaneHeight)
-        dividerHeight.constant = collapsed ? 0 : dividerThickness
-        todayToggleButton?.contentTintColor = collapsed
-            ? NSColor(calibratedWhite: 0.64, alpha: 1)
-            : accentColor
-        UserDefaults.standard.set(collapsed, forKey: "todayPane.collapsed")
-        relayoutEditors()
-    }
-
     private func setTodayPaneHeight(_ height: CGFloat) {
-        guard !todayPane.isHidden, monthCalendar.isHidden else { return }
+        guard viewMode == .both, monthCalendar.isHidden else { return }
         let clamped = clampedTodayPaneHeight(height)
         todayPaneHeight.constant = clamped
         UserDefaults.standard.set(Double(clamped), forKey: "dayPage.height")
@@ -931,13 +991,9 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         newButton.toolTip = "새 노트 (⌘N)"
         let closeButton = toolbarButton(symbol: "xmark", label: "노트 숨기기", action: #selector(hidePanel))
         closeButton.toolTip = "숨기기 (⌘Q)"
-        let todayButton = toolbarButton(symbol: "calendar", label: "오늘 할 일 펼치기 또는 접기", action: #selector(toggleTodayPane))
-        todayButton.toolTip = "오늘 할 일 펼치기/접기 (⌘⇧T, ⌥⇧`로 바로 열기)"
-        todayToggleButton = todayButton
         let header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(listButton)
-        header.addSubview(todayButton)
         header.addSubview(newButton)
         header.addSubview(closeButton)
         header.addSubview(headerTitleLabel)
@@ -948,8 +1004,6 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
             closeButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             newButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
             newButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            todayButton.trailingAnchor.constraint(equalTo: newButton.leadingAnchor, constant: -4),
-            todayButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             headerTitleLabel.centerXAnchor.constraint(equalTo: header.centerXAnchor),
             headerTitleLabel.centerYAnchor.constraint(equalTo: listButton.centerYAnchor),
             headerTitleLabel.leadingAnchor.constraint(
@@ -957,7 +1011,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
                 constant: 10
             ),
             headerTitleLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: todayButton.leadingAnchor,
+                lessThanOrEqualTo: newButton.leadingAnchor,
                 constant: -10
             ),
         ])
@@ -1295,7 +1349,13 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
     @objc private func trashCurrentFromMenu() { closeOverlays(); trashCurrent() }
 
+    /// The header names what is in view: the chosen day when only the day shows, otherwise
+    /// the note being edited.
     private func updateTitle() {
+        if viewMode == .today {
+            applyTitle(DailyNote.title(for: selectedDay))
+            return
+        }
         applyTitle(NoteContent.isEmpty(editor.attributedString())
             ? "새 노트"
             : NoteContent.title(from: editor.attributedString()))
@@ -1377,6 +1437,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
     }
 
     func cycleNote(step: Int, controlHeld: Bool) {
+        revealNotes()
         saveNow()
         showingTrash = false
         scopeControl.selectedSegment = 0
@@ -1502,6 +1563,7 @@ final class StickyPanelController: NSWindowController, NSWindowDelegate, NSTextV
         updateTasksTally()
         relayoutEditors()
         refreshWeekStrip()
+        if viewMode == .today { updateTitle() }
     }
 
     private func loadDailyPart(

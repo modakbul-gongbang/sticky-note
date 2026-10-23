@@ -202,8 +202,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(withTitle: "축소", action: #selector(StickyPanelController.zoomOut), keyEquivalent: "-")
         viewMenu.addItem(withTitle: "실제 크기", action: #selector(StickyPanelController.resetZoom), keyEquivalent: "0")
         viewMenu.addItem(.separator())
-        viewMenu.addItem(withTitle: "오늘 할 일 접기/펼치기", action: #selector(StickyPanelController.toggleTodayPane), keyEquivalent: "t")
-        viewMenu.items.last?.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(withTitle: "오늘만 보기", action: #selector(StickyPanelController.showTodayOnly), keyEquivalent: "1")
+        viewMenu.addItem(withTitle: "오늘과 노트 함께 보기", action: #selector(StickyPanelController.showTodayAndNotes), keyEquivalent: "2")
+        viewMenu.addItem(withTitle: "노트만 보기", action: #selector(StickyPanelController.showNotesOnly), keyEquivalent: "3")
+        viewMenu.addItem(.separator())
         viewMenu.addItem(withTitle: "월 달력 보기", action: #selector(StickyPanelController.showMonthCalendar), keyEquivalent: "k")
         viewMenu.items.last?.keyEquivalentModifierMask = [.command, .shift]
         for item in viewMenu.items { item.target = controller }

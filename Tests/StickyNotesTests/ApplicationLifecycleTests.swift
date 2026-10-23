@@ -665,39 +665,56 @@ import Testing
         #expect((childStyle?.firstLineHeadIndent ?? 0) > 0)
     }
 
-    @Test func headerCalendarButtonCollapsesAndRestoresTheDayPane() throws {
+    @Test func viewSwitchShowsTheDayTheNoteOrBothFromFooterAndShortcuts() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let wasCollapsed = UserDefaults.standard.object(forKey: "todayPane.collapsed")
-        defer { UserDefaults.standard.set(wasCollapsed, forKey: "todayPane.collapsed") }
+        let savedMode = UserDefaults.standard.object(forKey: "viewMode")
+        defer { UserDefaults.standard.set(savedMode, forKey: "viewMode") }
+        UserDefaults.standard.set("both", forKey: "viewMode")
 
         let controller = StickyPanelController(repository: try NoteRepository(rootURL: root))
         let contentView = try #require(controller.window?.contentView)
         let descendants = recursiveSubviews(of: contentView)
-        let toggle = try #require(descendants.compactMap { $0 as? NSButton }.first {
-            $0.accessibilityLabel() == "오늘 할 일 펼치기 또는 접기"
+        let control = try #require(descendants.compactMap { $0 as? NSSegmentedControl }.first {
+            $0.accessibilityLabel() == "보기 전환"
         })
         let pane = try #require(descendants.first { $0.accessibilityLabel() == "오늘 할 일" })
         let noteScroll = try #require(descendants.compactMap { $0 as? RichTextView }.first {
             $0.accessibilityLabel() == "노트 편집기"
         }?.enclosingScrollView)
-
-        controller.openToday()
+        let viewMenu = try #require(AppDelegate().makeMainMenu(for: controller).items.compactMap(\.submenu).first { $0.title == "보기" })
+        for (key, title) in [("1", "오늘만 보기"), ("2", "오늘과 노트 함께 보기"), ("3", "노트만 보기")] {
+            let item = try #require(viewMenu.items.first { $0.title == title })
+            #expect(item.keyEquivalent == key && item.keyEquivalentModifierMask == [.command])
+        }
         contentView.layoutSubtreeIfNeeded()
-        #expect(!pane.isHidden)
-        let sharedHeight = noteScroll.frame.height
+        #expect(control.selectedSegment == 1)
+        let sharedPaneHeight = pane.frame.height
 
-        _ = toggle.target?.perform(toggle.action, with: toggle)
+        control.selectedSegment = 0
+        _ = control.target?.perform(control.action, with: control)
         contentView.layoutSubtreeIfNeeded()
-        #expect(pane.isHidden)
-        #expect(noteScroll.frame.height > sharedHeight)
+        #expect(controller.viewMode == .today)
+        #expect(noteScroll.isHidden)
+        #expect(controller.window?.title == DailyNote.title(for: Date()))
+        #expect(pane.frame.height > sharedPaneHeight + 100)
 
-        _ = toggle.target?.perform(toggle.action, with: toggle)
+        controller.showNotesOnly()
         contentView.layoutSubtreeIfNeeded()
-        #expect(!pane.isHidden)
-        #expect(noteScroll.frame.height == sharedHeight)
+        #expect(control.selectedSegment == 2)
+        #expect(pane.isHidden && !noteScroll.isHidden)
+        #expect(UserDefaults.standard.string(forKey: "viewMode") == "notes")
+
+        controller.showTodayAndNotes()
+        contentView.layoutSubtreeIfNeeded()
+        #expect(!pane.isHidden && !noteScroll.isHidden)
+        #expect(pane.frame.height == sharedPaneHeight)
+
+        controller.showTodayOnly()
+        controller.newNote()
+        #expect(controller.viewMode == .both)
     }
 
     @Test func draggingTheDividerResizesThePanesInsteadOfMovingTheWindow() throws {
@@ -706,10 +723,10 @@ import Testing
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let defaults = UserDefaults.standard
-        let saved = (defaults.object(forKey: "dayPage.height"), defaults.object(forKey: "todayPane.collapsed"))
+        let saved = (defaults.object(forKey: "dayPage.height"), defaults.object(forKey: "viewMode"))
         defer {
             defaults.set(saved.0, forKey: "dayPage.height")
-            defaults.set(saved.1, forKey: "todayPane.collapsed")
+            defaults.set(saved.1, forKey: "viewMode")
         }
         defaults.set(320.0, forKey: "dayPage.height")
 
@@ -894,10 +911,10 @@ import Testing
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let defaults = UserDefaults.standard
-        let saved = (defaults.object(forKey: "dayPage.height"), defaults.object(forKey: "todayPane.collapsed"))
+        let saved = (defaults.object(forKey: "dayPage.height"), defaults.object(forKey: "viewMode"))
         defer {
             defaults.set(saved.0, forKey: "dayPage.height")
-            defaults.set(saved.1, forKey: "todayPane.collapsed")
+            defaults.set(saved.1, forKey: "viewMode")
         }
         defaults.set(320.0, forKey: "dayPage.height")
 
@@ -937,10 +954,10 @@ import Testing
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let defaults = UserDefaults.standard
-        let saved = (defaults.object(forKey: "dayPage.height"), defaults.object(forKey: "todayPane.collapsed"))
+        let saved = (defaults.object(forKey: "dayPage.height"), defaults.object(forKey: "viewMode"))
         defer {
             defaults.set(saved.0, forKey: "dayPage.height")
-            defaults.set(saved.1, forKey: "todayPane.collapsed")
+            defaults.set(saved.1, forKey: "viewMode")
         }
         defaults.set(320.0, forKey: "dayPage.height")
 
