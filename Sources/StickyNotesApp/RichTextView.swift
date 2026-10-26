@@ -227,6 +227,32 @@ final class RichTextView: NSTextView {
         }
     }
 
+    override func deleteForward(_ sender: Any?) {
+        guard listItemEditor.deleteForwardIntoListIfNeeded() else {
+            super.deleteForward(sender)
+            return
+        }
+    }
+
+    override func moveLeft(_ sender: Any?) {
+        guard listItemEditor.moveBackwardOverMarker() else {
+            super.moveLeft(sender)
+            return
+        }
+    }
+
+    override func moveBackward(_ sender: Any?) {
+        guard listItemEditor.moveBackwardOverMarker() else {
+            super.moveBackward(sender)
+            return
+        }
+    }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        let selectable = ranges.map { NSValue(range: listItemEditor.selectableRange($0.rangeValue)) }
+        super.setSelectedRanges(selectable, affinity: affinity, stillSelecting: stillSelecting)
+    }
+
     override func didChangeText() {
         listItemEditor.textDidChange()
         detectURLs()

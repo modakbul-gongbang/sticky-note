@@ -193,6 +193,61 @@ final class ListItemEditor: NSObject {
         return true
     }
 
+    /// A marker is stored as text but reads as part of the row, so the caret never rests inside
+    /// or before one: a caret that lands there moves past it, and a selection edge inside it
+    /// widens to take the whole marker.
+    func selectableRange(_ proposed: NSRange) -> NSRange {
+        guard let textView, proposed.location != NSNotFound,
+              NSMaxRange(proposed) <= textView.requiredTextStorage.length else { return proposed }
+        guard proposed.length > 0 else {
+            guard let marker = markerRange(at: proposed.location),
+                  proposed.location < NSMaxRange(marker) else { return proposed }
+            return NSRange(location: NSMaxRange(marker), length: 0)
+        }
+        var start = proposed.location
+        var end = NSMaxRange(proposed)
+        if let marker = markerRange(at: start), start > marker.location, start < NSMaxRange(marker) {
+            start = marker.location
+        }
+        if let marker = markerRange(at: end), end > marker.location, end < NSMaxRange(marker) {
+            end = NSMaxRange(marker)
+        }
+        return NSRange(location: start, length: end - start)
+    }
+
+    /// Stepping back off a row's first character goes to the end of the row above, since the
+    /// marker before it is not a place to type.
+    func moveBackwardOverMarker() -> Bool {
+        guard let textView else { return false }
+        let selection = textView.selectedRange()
+        guard selection.length == 0,
+              let marker = markerRange(at: selection.location),
+              selection.location == NSMaxRange(marker) else { return false }
+        if marker.location > 0 {
+            textView.setSelectedRange(NSRange(location: marker.location - 1, length: 0))
+        }
+        textView.scrollRangeToVisible(textView.selectedRange())
+        return true
+    }
+
+    /// Forward delete at the end of a row joins the next row's text, leaving its marker behind.
+    func deleteForwardIntoListIfNeeded() -> Bool {
+        guard let textView else { return false }
+        let selection = textView.selectedRange()
+        let source = textView.string as NSString
+        guard selection.length == 0, selection.location < source.length,
+              source.character(at: selection.location) == 10,
+              let marker = markerRange(at: selection.location + 1) else { return false }
+        transaction(named: "목록 합치기") {
+            textView.requiredTextStorage.deleteCharacters(
+                in: NSRange(location: selection.location, length: NSMaxRange(marker) - selection.location)
+            )
+            textView.setSelectedRange(NSRange(location: selection.location, length: 0))
+            renumberOrderedLists()
+        }
+        return true
+    }
+
     func handleMouseDown(_ event: NSEvent) -> Bool {
         guard let textView else { return false }
         prepareForDrawing()
@@ -431,6 +486,12 @@ final class ListItemEditor: NSObject {
         let source = textView.string as NSString
         let bounded = min(max(0, location), source.length)
         return source.paragraphRange(for: NSRange(location: bounded, length: 0))
+    }
+
+    private func markerRange(at location: Int) -> NSRange? {
+        let paragraph = paragraphRange(at: location)
+        guard let item = match(in: paragraph) else { return nil }
+        return NSRange(location: paragraph.location, length: item.prefixLength)
     }
 
     private func kind(in paragraph: NSRange) -> ListItemKind? {

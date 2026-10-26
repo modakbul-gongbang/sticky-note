@@ -732,4 +732,69 @@ import Testing
         undoManager.redo()
         #expect(editor.string == "\n평문 입력")
     }
+
+    @Test func theCaretStepsOverListMarkersInsteadOfStoppingInsideThem() {
+        let editor = configuredEditor()
+        let undoManager = editor.undoManager!
+        undoManager.groupsByEvent = false
+        func performUserAction(_ action: () -> Void) {
+            undoManager.beginUndoGrouping()
+            action()
+            undoManager.endUndoGrouping()
+        }
+        func caret() -> Int { editor.selectedRange().location }
+        func type(_ text: String) {
+            performUserAction { editor.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0)) }
+        }
+
+        performUserAction { editor.insertListItem(.bullet) }
+        type("첫째")
+        performUserAction { editor.insertNewline(nil) }
+        type("둘째")
+        #expect(editor.string == "• 첫째\n• 둘째")
+        let firstLineEnd = 4
+        let secondContentStart = 7
+
+        // Left from the first character of a row goes to the end of the row above, so Return
+        // there opens an empty row between the two instead of a second marker on this one.
+        editor.setSelectedRange(NSRange(location: secondContentStart, length: 0))
+        editor.moveLeft(nil)
+        #expect(caret() == firstLineEnd)
+        performUserAction { editor.insertNewline(nil) }
+        #expect(editor.string == "• 첫째\n• \n• 둘째")
+        undoManager.undo()
+        #expect(editor.string == "• 첫째\n• 둘째")
+
+        // Right from the end of the row above lands on the first character, past the marker.
+        editor.setSelectedRange(NSRange(location: firstLineEnd, length: 0))
+        editor.moveRight(nil)
+        #expect(caret() == secondContentStart)
+
+        // The first row has nothing above it, so Left stays on its first character.
+        editor.setSelectedRange(NSRange(location: 2, length: 0))
+        editor.moveLeft(nil)
+        #expect(caret() == 2)
+
+        // A click or line-start command that lands on the marker puts the caret after it.
+        for location in [5, 6] {
+            editor.setSelectedRange(NSRange(location: location, length: 0))
+            #expect(caret() == secondContentStart)
+        }
+        editor.setSelectedRange(NSRange(location: 9, length: 0))
+        editor.moveToBeginningOfLine(nil)
+        #expect(caret() == secondContentStart)
+
+        // Extending a selection back off the first character takes the whole marker with it.
+        editor.setSelectedRange(NSRange(location: secondContentStart, length: 0))
+        editor.moveLeftAndModifySelection(nil)
+        #expect(editor.selectedRange() == NSRange(location: 5, length: 2))
+
+        // Forward delete at the end of a row joins the next row's text, not its marker.
+        editor.setSelectedRange(NSRange(location: firstLineEnd, length: 0))
+        performUserAction { editor.deleteForward(nil) }
+        #expect(editor.string == "• 첫째둘째")
+        #expect(caret() == firstLineEnd)
+        undoManager.undo()
+        #expect(editor.string == "• 첫째\n• 둘째")
+    }
 }
